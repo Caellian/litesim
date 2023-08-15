@@ -2,8 +2,8 @@ use crate::{
     error::SimulationError,
     model::{ConnectorPath, Route},
     prelude::{EventSource, TimeTrigger},
-    time::{SimDuration, SimTimeValue, SimulationTime},
-    util::CowStr,
+    time::{SimDuration, SimTimeValue},
+    util::{CowStr, ToCowStr},
 };
 
 pub trait Event: 'static {
@@ -34,12 +34,12 @@ impl<'a, E: Event> ProducedEvent<'a, E> {
 
     pub fn new_instant(
         event: E,
-        source_connector: CowStr<'a>,
+        source_connector: impl ToCowStr<'a>,
         target: Option<ConnectorPath<'a>>,
     ) -> ProducedEvent<'a, E> {
         ProducedEvent {
             event,
-            source_connector,
+            source_connector: source_connector.to_cow_str(),
             target,
             scheduling: TimeTrigger::Now,
         }

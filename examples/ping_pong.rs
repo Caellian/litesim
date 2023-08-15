@@ -34,7 +34,7 @@ impl Model<PingPongEvent> for Player {
 
     fn handle_change<'s>(&mut self, sim: SimulationCtx<'s>) -> ChangeEffect<'s, PingPongEvent> {
         log::info!("Player {} bounced at: {}", sim.owner, sim.time);
-        ChangeEffect::Produce(sim.create_event(PingPongEvent, "send", None))
+        ChangeEffect::Produce(ProducedEvent::new_instant(PingPongEvent, "send", None))
     }
 }
 

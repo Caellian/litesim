@@ -224,15 +224,6 @@ impl<'s> SimulationCtx<'s> {
         }
     }
 
-    pub fn create_event<E: Event>(
-        &self,
-        event: E,
-        source_connector: impl ToCowStr<'s>,
-        target: Option<ConnectorPath<'s>>,
-    ) -> ProducedEvent<'s, E> {
-        ProducedEvent::new_instant(event, source_connector.to_cow_str(), target)
-    }
-
     pub fn rand<T>(&self) -> T
     where
         rand::distributions::Standard: rand::prelude::Distribution<T>,
