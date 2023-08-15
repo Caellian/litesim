@@ -1,7 +1,7 @@
 use crate::{
     error::SimulationError,
-    model::{ModelConnection, Route},
-    prelude::EventSource,
+    model::{ConnectorPath, Route},
+    prelude::{EventSource, TimeTrigger},
     time::{SimDuration, SimTimeValue, SimulationTime},
     util::CowStr,
 };
@@ -10,36 +10,19 @@ pub trait Event: 'static {
     fn type_id() -> &'static str;
 }
 
-#[derive(Clone)]
-pub enum EventScheduling {
-    Now,
-    At { time: SimTimeValue },
-    In { delay: SimDuration },
-}
-
-impl EventScheduling {
-    pub fn final_time(&self, current: SimulationTime) -> SimulationTime {
-        match self {
-            EventScheduling::Now => current,
-            EventScheduling::At { time } => SimulationTime::new(time.clone()),
-            EventScheduling::In { delay } => current + delay.clone(),
-        }
-    }
-}
-
 pub struct ProducedEvent<'a, E: Event> {
     pub event: E,
     pub source_connector: CowStr<'a>,
-    pub(crate) target: Option<ModelConnection<'a>>,
-    pub(crate) scheduling: EventScheduling,
+    pub(crate) target: Option<ConnectorPath<'a>>,
+    pub(crate) scheduling: TimeTrigger,
 }
 
 impl<'a, E: Event> ProducedEvent<'a, E> {
     pub fn new(
         event: E,
         source_connector: CowStr<'a>,
-        target: Option<ModelConnection<'a>>,
-        scheduling: EventScheduling,
+        target: Option<ConnectorPath<'a>>,
+        scheduling: TimeTrigger,
     ) -> Self {
         Self {
             event,
@@ -52,13 +35,13 @@ impl<'a, E: Event> ProducedEvent<'a, E> {
     pub fn new_instant(
         event: E,
         source_connector: CowStr<'a>,
-        target: Option<ModelConnection<'a>>,
+        target: Option<ConnectorPath<'a>>,
     ) -> ProducedEvent<'a, E> {
         ProducedEvent {
             event,
             source_connector,
             target,
-            scheduling: EventScheduling::Now,
+            scheduling: TimeTrigger::Now,
         }
     }
 
@@ -67,7 +50,7 @@ impl<'a, E: Event> ProducedEvent<'a, E> {
             event: self.event,
             source_connector: self.source_connector,
             target: self.target,
-            scheduling: EventScheduling::At { time },
+            scheduling: TimeTrigger::At { time },
         }
     }
 
@@ -76,7 +59,7 @@ impl<'a, E: Event> ProducedEvent<'a, E> {
             event: self.event,
             source_connector: self.source_connector,
             target: self.target,
-            scheduling: EventScheduling::In { delay },
+            scheduling: TimeTrigger::In { delay },
         }
     }
 }
@@ -87,7 +70,7 @@ pub struct RoutedEvent<'s, E: Event> {
 }
 
 impl<'s, E: Event> RoutedEvent<'s, E> {
-    pub fn new_external(event: E, target: ModelConnection<'s>) -> Self {
+    pub fn new_external(event: E, target: ConnectorPath<'s>) -> Self {
         Self {
             event,
             route: Route {
@@ -104,10 +87,10 @@ impl<'s, E: Event> RoutedEvent<'s, E> {
     pub fn from_produced(
         source_model: CowStr<'s>,
         event: ProducedEvent<'s, E>,
-        default_target: Option<ModelConnection<'s>>,
+        default_target: Option<ConnectorPath<'s>>,
     ) -> Result<Self, SimulationError> {
         let route = Route::new_internal(
-            ModelConnection {
+            ConnectorPath {
                 model: source_model.clone(),
                 connector: event.source_connector,
             },

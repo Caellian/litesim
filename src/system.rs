@@ -9,7 +9,7 @@ use std::{
 use crate::{
     error::ValidationError,
     event::Event,
-    model::{Model, ModelConnection, Route},
+    model::{ConnectorPath, Model, Route},
     util::CowStr,
 };
 
@@ -18,7 +18,7 @@ pub(crate) type ModelStore<'s, Event> = IdStore<'s, Box<dyn Model<Event>>>;
 
 pub struct SystemModel<'s, E: Event> {
     pub models: ModelStore<'s, E>,
-    pub routes: HashMap<ModelConnection<'s>, ModelConnection<'s>>,
+    pub routes: HashMap<ConnectorPath<'s>, ConnectorPath<'s>>,
     pub validated: RefCell<bool>,
     pub(crate) route_cache: RefCell<IdStore<'s, AdjacentModels<'s>>>,
 }
@@ -129,8 +129,8 @@ impl<'s, E: Event> SystemModel<'s, E> {
 
 #[derive(Clone)]
 pub struct AdjacentModels<'s> {
-    pub inputs: Vec<ModelConnection<'s>>,
-    pub outputs: Vec<ModelConnection<'s>>,
+    pub inputs: Vec<ConnectorPath<'s>>,
+    pub outputs: Vec<ConnectorPath<'s>>,
 }
 
 impl<'s> Default for AdjacentModels<'s> {

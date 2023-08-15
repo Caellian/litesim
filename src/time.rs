@@ -80,3 +80,32 @@ impl Display for SimulationTime {
         self.value.fmt(f)
     }
 }
+
+#[derive(Clone)]
+pub enum TimeTrigger {
+    Now,
+    At { time: SimTimeValue },
+    In { delay: SimDuration },
+}
+
+impl TimeTrigger {
+    pub fn now() -> TimeTrigger {
+        TimeTrigger::Now
+    }
+
+    pub fn specific(time: SimTimeValue) -> TimeTrigger {
+        TimeTrigger::At { time }
+    }
+
+    pub fn relative(delay: SimDuration) -> TimeTrigger {
+        TimeTrigger::In { delay }
+    }
+
+    pub fn to_discrete(self, current: SimulationTime) -> SimulationTime {
+        match self {
+            TimeTrigger::Now => current,
+            TimeTrigger::At { time } => SimulationTime::new(time.clone()),
+            TimeTrigger::In { delay } => current + delay.clone(),
+        }
+    }
+}

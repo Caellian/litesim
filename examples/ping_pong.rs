@@ -19,7 +19,7 @@ impl Model<PingPongEvent> for Player {
         &mut self,
         _event: PingPongEvent,
         connector: litesim::util::CowStr<'s>,
-        sim: SimulationRef,
+        sim: SimulationCtx,
         source: EventSource<'s>,
     ) -> InputEffect<'s, PingPongEvent> {
         log::info!(
@@ -32,7 +32,7 @@ impl Model<PingPongEvent> for Player {
         InputEffect::ScheduleInternal(sim.time + sim.rand_range(0.0..1.0))
     }
 
-    fn handle_change<'s>(&mut self, sim: SimulationRef<'s>) -> ChangeEffect<'s, PingPongEvent> {
+    fn handle_change<'s>(&mut self, sim: SimulationCtx<'s>) -> ChangeEffect<'s, PingPongEvent> {
         log::info!("Player {} bounced at: {}", sim.owner, sim.time);
         ChangeEffect::Produce(sim.create_event(PingPongEvent, "send", None))
     }

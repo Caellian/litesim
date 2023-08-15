@@ -9,10 +9,10 @@ use rand::Rng;
 
 use crate::{
     error::{SchedulerError, SimulationError},
-    event::{Event, EventScheduling, ProducedEvent, RoutedEvent},
-    model::{ChangeEffect, InputEffect, ModelConnection},
+    event::{Event, ProducedEvent, RoutedEvent},
+    model::{ChangeEffect, ConnectorPath, InputEffect},
     system::{AdjacentModels, BorrowedModel, SystemModel},
-    time::SimulationTime,
+    time::{SimulationTime, TimeTrigger},
     util::{CowStr, SimulationRng, ToCowStr},
 };
 
@@ -37,7 +37,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
         let mut scheduler = Scheduler::new(initial_time);
         for (id, model) in system.models.iter_mut() {
             let route_cache = system.route_cache.borrow();
-            let sim_ref = SimulationRef::new_parameterized::<E>(
+            let sim_ref = SimulationCtx::new_parameterized::<E>(
                 &*route_cache,
                 initial_time,
                 global_rng.clone(),
@@ -73,16 +73,16 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
         &mut self,
         model_id: CowStr<'s>,
         event: ProducedEvent<'s, E>,
-        default_target: Option<ModelConnection<'s>>,
+        default_target: Option<ConnectorPath<'s>>,
     ) -> Result<(), SimulationError> {
         let scheduling = event.scheduling.clone();
         let routed = RoutedEvent::from_produced(model_id, event, default_target)?;
         let time = self.initial_time.clone();
         match scheduling {
-            EventScheduling::Now => self.route_event(routed)?,
+            TimeTrigger::Now => self.route_event(routed)?,
             scheduling => self
                 .scheduler
-                .schedule_event(scheduling.final_time(time), routed)?,
+                .schedule_event(scheduling.to_discrete(time), routed)?,
         }
 
         Ok(())
@@ -98,7 +98,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
             },
         )?;
 
-        let state = SimulationRef::new(&self, target_model.clone());
+        let state = SimulationCtx::new(&self, target_model.clone());
 
         let result = model.handle_input(event, target_connector, state, route.from.clone());
 
@@ -140,7 +140,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
             for entry in scheduled {
                 match entry {
                     Scheduled::Internal(model_id) => {
-                        let state = SimulationRef::new(&self, model_id.clone());
+                        let state = SimulationCtx::new(&self, model_id.clone());
                         let default_target = if state.routes.outputs.len() == 1 {
                             state.routes.outputs.first().cloned()
                         } else {
@@ -183,14 +183,14 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
 }
 
 #[derive(Clone)]
-pub struct SimulationRef<'s> {
+pub struct SimulationCtx<'s> {
     pub time: SimulationTime,
     pub rng: Rc<RefCell<dyn SimulationRng>>,
     pub owner: CowStr<'s>,
     pub routes: AdjacentModels<'s>,
 }
 
-impl<'s> SimulationRef<'s> {
+impl<'s> SimulationCtx<'s> {
     pub fn new<E: Event + 's>(simulation: &Simulation<'s, E>, owner: CowStr<'s>) -> Self {
         let routes = simulation
             .system
@@ -200,7 +200,7 @@ impl<'s> SimulationRef<'s> {
             .cloned()
             .unwrap_or_default();
 
-        SimulationRef {
+        SimulationCtx {
             time: simulation.current_time(),
             rng: simulation.global_rng.clone(),
             owner,
@@ -216,7 +216,7 @@ impl<'s> SimulationRef<'s> {
     ) -> Self {
         let routes = route_cache.get(&owner).cloned().unwrap_or_default();
 
-        SimulationRef {
+        SimulationCtx {
             time,
             rng,
             owner,
@@ -228,7 +228,7 @@ impl<'s> SimulationRef<'s> {
         &self,
         event: E,
         source_connector: impl ToCowStr<'s>,
-        target: Option<ModelConnection<'s>>,
+        target: Option<ConnectorPath<'s>>,
     ) -> ProducedEvent<'s, E> {
         ProducedEvent::new_instant(event, source_connector.to_cow_str(), target)
     }

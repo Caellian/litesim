@@ -3,18 +3,18 @@ use std::fmt::Debug;
 use crate::{
     event::{Event, ProducedEvent},
     prelude::SimulationTime,
-    simulation::SimulationRef,
+    simulation::SimulationCtx,
     util::CowStr,
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ModelConnection<'s> {
+pub struct ConnectorPath<'s> {
     pub model: CowStr<'s>,
     pub connector: CowStr<'s>,
 }
 
-impl<'s> ModelConnection<'s> {
+impl<'s> ConnectorPath<'s> {
     pub fn new(model: impl AsRef<str>, connector: impl AsRef<str>) -> Self {
         Self {
             model: CowStr::Owned(model.as_ref().to_string()),
@@ -23,7 +23,7 @@ impl<'s> ModelConnection<'s> {
     }
 }
 
-impl Debug for ModelConnection<'_> {
+impl Debug for ConnectorPath<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}::{}", self.model, self.connector)
     }
@@ -32,7 +32,7 @@ impl Debug for ModelConnection<'_> {
 #[macro_export]
 macro_rules! connection {
     ($model:tt :: $connector:tt) => {
-        ::litesim::model::ModelConnection {
+        ::litesim::model::ConnectorPath {
             model: ::litesim::util::CowStr::Borrowed(stringify!($model)),
             connector: ::litesim::util::CowStr::Borrowed(stringify!($connector)),
         }
@@ -80,13 +80,13 @@ macro_rules! declare_connectors {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventSource<'s> {
     External,
-    Model(ModelConnection<'s>),
+    Model(ConnectorPath<'s>),
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Route<'s> {
     pub from: EventSource<'s>,
-    pub to: ModelConnection<'s>,
+    pub to: ConnectorPath<'s>,
 }
 
 #[macro_export]
@@ -100,7 +100,7 @@ macro_rules! route {
 }
 
 impl<'s> Route<'s> {
-    pub fn new_internal(from: ModelConnection<'s>, to: ModelConnection<'s>) -> Self {
+    pub fn new_internal(from: ConnectorPath<'s>, to: ConnectorPath<'s>) -> Self {
         Route {
             from: EventSource::Model(from),
             to,
@@ -110,7 +110,7 @@ impl<'s> Route<'s> {
     pub fn starts_in_model(&self, id: impl AsRef<str>) -> bool {
         match &self.from {
             EventSource::External => false,
-            EventSource::Model(ModelConnection {
+            EventSource::Model(ConnectorPath {
                 model: model_id, ..
             }) => model_id.as_ref() == id.as_ref(),
         }
@@ -120,20 +120,20 @@ impl<'s> Route<'s> {
         self.to.model.as_ref() == id.as_ref()
     }
 
-    pub fn from_connection(&self) -> ModelConnection<'s> {
+    pub fn from_connection(&self) -> ConnectorPath<'s> {
         match &self.from {
             EventSource::External => panic!("expected route from to be an internal connection"),
             EventSource::Model(connection) => connection.clone(),
         }
     }
 
-    pub fn to_connection(&self) -> ModelConnection<'s> {
+    pub fn to_connection(&self) -> ConnectorPath<'s> {
         self.to.clone()
     }
 }
 
-impl<'s> From<(ModelConnection<'s>, ModelConnection<'s>)> for Route<'s> {
-    fn from(value: (ModelConnection<'s>, ModelConnection<'s>)) -> Self {
+impl<'s> From<(ConnectorPath<'s>, ConnectorPath<'s>)> for Route<'s> {
+    fn from(value: (ConnectorPath<'s>, ConnectorPath<'s>)) -> Self {
         Route {
             from: EventSource::Model(value.0),
             to: value.1,
@@ -141,8 +141,8 @@ impl<'s> From<(ModelConnection<'s>, ModelConnection<'s>)> for Route<'s> {
     }
 }
 
-impl<'s> From<(&ModelConnection<'s>, &ModelConnection<'s>)> for Route<'s> {
-    fn from(value: (&ModelConnection<'s>, &ModelConnection<'s>)) -> Self {
+impl<'s> From<(&ConnectorPath<'s>, &ConnectorPath<'s>)> for Route<'s> {
+    fn from(value: (&ConnectorPath<'s>, &ConnectorPath<'s>)) -> Self {
         Route {
             from: EventSource::Model(value.0.clone()),
             to: value.1.clone(),
@@ -197,7 +197,7 @@ pub trait Model<E: Event> {
         &mut self,
         event: E,
         connector: CowStr<'s>,
-        sim: SimulationRef,
+        ctx: SimulationCtx,
         source: EventSource<'s>,
     ) -> InputEffect<'s, E> {
         InputEffect::Drop(event)
@@ -205,14 +205,14 @@ pub trait Model<E: Event> {
     /// Handler for internal model changes when the elapsed time is supposed to affect
     /// the state of the model.
     #[must_use]
-    fn handle_change<'s>(&mut self, sim: SimulationRef<'s>) -> ChangeEffect<'s, E> {
+    fn handle_change<'s>(&mut self, ctx: SimulationCtx<'s>) -> ChangeEffect<'s, E> {
         ChangeEffect::None
     }
     /// Returns time of next expected internal change.
     ///
     /// This method is allowed to modify the model to store the returned value.
     #[must_use]
-    fn next_change_time<'s>(&mut self, sim: SimulationRef<'s>) -> Option<SimulationTime> {
+    fn next_change_time<'s>(&mut self, ctx: SimulationCtx<'s>) -> Option<SimulationTime> {
         None
     }
 }
