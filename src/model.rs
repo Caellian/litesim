@@ -368,7 +368,7 @@ macro_rules! push {
     }};
 }
 
-pub trait Model<'s> {
+pub trait Model<'s>: 'static {
     type I: InputConnectorList<'s> + HeterogeneousTuple + 'static;
     type O: OutputConnectorList<'s> + HeterogeneousTuple + 'static;
 

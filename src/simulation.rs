@@ -325,7 +325,7 @@ impl<'c, 's: 'c> ConnectorCtx<'c, 's> {
         event: Event<M>,
         target: Option<ConnectorPath<'c>>,
         time: impl Into<SimulationTime>,
-    ) -> Result<(), SimulationError> {T
+    ) -> Result<(), SimulationError> {
         self.sim
             .push_event_with_time_and_source(event, target, time, self.on_connector.clone())
     }
