@@ -1,15 +1,11 @@
 use litesim::prelude::*;
 
 pub struct PingPongEvent;
-impl Event for PingPongEvent {
-    fn type_id() -> &'static str {
-        "ping_pong"
-    }
-}
 
 pub struct Player;
 
-impl Model<PingPongEvent> for Player {
+impl Model for Player {
+    /*
     declare_connectors! {
         input: ["recieve"],
         output: ["send"]
@@ -24,7 +20,7 @@ impl Model<PingPongEvent> for Player {
     ) -> InputEffect<'s, PingPongEvent> {
         log::info!(
             "Player {} received ball on connector: {}, from {:?}, at: {}",
-            sim.owner,
+            sim.current,
             connector,
             source,
             sim.time,
@@ -32,9 +28,23 @@ impl Model<PingPongEvent> for Player {
         InputEffect::ScheduleInternal(sim.time + sim.rand_range(0.0..1.0))
     }
 
-    fn handle_change<'s>(&mut self, sim: SimulationCtx<'s>) -> ChangeEffect<'s, PingPongEvent> {
-        log::info!("Player {} bounced at: {}", sim.owner, sim.time);
+    fn handle_update<'s>(&mut self, sim: SimulationCtx<'s>) -> ChangeEffect<'s, PingPongEvent> {
+        log::info!("Player {} bounced at: {}", sim.current, sim.time);
         ChangeEffect::Produce(ProducedEvent::new_instant(PingPongEvent, "send", None))
+    } */
+
+    fn input_connectors<'s>(&self) -> Self::I {
+        (("", |e: PingPongEvent, ctx: SimulationCtx| {
+            ctx.push_event_with_source(event, target, source_connector)
+        }),)
+    }
+
+    fn output_connectors<'s>(&self) -> Self::O {
+        ()
+    }
+
+    fn handle_update<'s>(&mut self, ctx: SimulationCtx<'s>) {
+        push!(ctx, "send", PingPongEvent)
     }
 }
 

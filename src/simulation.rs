@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
+    ops::Deref,
     pin::Pin,
     rc::Rc,
 };
@@ -8,25 +9,25 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    error::{SchedulerError, SimulationError},
-    event::{Event, ProducedEvent, RoutedEvent},
-    model::{ChangeEffect, ConnectorPath, InputEffect},
+    error::{RoutingError, SchedulerError, SimulationError},
+    event::{Event, Message, ProducedEvent, RoutedEvent},
+    model::{ConnectorPath, EventSource, Route},
     system::{AdjacentModels, BorrowedModel, SystemModel},
     time::{SimulationTime, TimeTrigger},
-    util::{CowStr, SimulationRng, ToCowStr},
+    util::{CowStr, SimulationRng},
 };
 
-pub struct Simulation<'s, E: Event> {
+pub struct Simulation<'s> {
     global_rng: Rc<RefCell<dyn SimulationRng>>,
-    system: Pin<Box<SystemModel<'s, E>>>,
+    system: Pin<Box<SystemModel<'s>>>,
     initial_time: SimulationTime,
-    scheduler: Scheduler<'s, E>,
+    scheduler: Pin<Box<Scheduler<'s>>>,
 }
 
-impl<'s, E: Event + 's> Simulation<'s, E> {
+impl<'s> Simulation<'s> {
     pub fn new(
         rng: impl SimulationRng + 'static,
-        mut system: SystemModel<'s, E>,
+        mut system: SystemModel<'s>,
         initial_time: impl Into<SimulationTime>,
     ) -> Result<Self, SimulationError> {
         system.validate()?;
@@ -34,19 +35,18 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
         let global_rng = Rc::new(RefCell::new(rng));
         let initial_time = initial_time.into();
 
-        let mut scheduler = Scheduler::new(initial_time);
+        let mut scheduler = Box::pin(Scheduler::new(initial_time));
         for (id, model) in system.models.iter_mut() {
             let route_cache = system.route_cache.borrow();
-            let sim_ref = SimulationCtx::new_parameterized::<E>(
+            let sim_ref = SimulationCtx::new_parameterized(
                 &*route_cache,
                 initial_time,
                 global_rng.clone(),
                 id.clone(),
+                &mut scheduler,
             );
 
-            if let Some(time) = model.next_change_time(sim_ref) {
-                scheduler.schedule_internal(time, id.clone())?;
-            }
+            model.erased_init(sim_ref);
         }
 
         Ok(Simulation {
@@ -57,11 +57,11 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
         })
     }
 
-    pub fn scheduler(&self) -> &Scheduler<'s, E> {
+    pub fn scheduler(&self) -> &Scheduler<'s> {
         &self.scheduler
     }
 
-    pub fn scheduler_mut(&mut self) -> &mut Scheduler<'s, E> {
+    pub fn scheduler_mut(&mut self) -> &mut Scheduler<'s> {
         &mut self.scheduler
     }
 
@@ -72,7 +72,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
     fn handle_produced_event(
         &mut self,
         model_id: CowStr<'s>,
-        event: ProducedEvent<'s, E>,
+        event: ProducedEvent<'s>,
         default_target: Option<ConnectorPath<'s>>,
     ) -> Result<(), SimulationError> {
         let scheduling = event.scheduling.clone();
@@ -88,7 +88,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
         Ok(())
     }
 
-    pub fn route_event(&mut self, event: RoutedEvent<'s, E>) -> Result<(), SimulationError> {
+    pub fn route_event(&mut self, event: RoutedEvent<'s>) -> Result<(), SimulationError> {
         let RoutedEvent { event, route } = event;
         let target_model = route.to.model.clone();
         let target_connector = route.to.connector.clone();
@@ -98,10 +98,17 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
             },
         )?;
 
-        let state = SimulationCtx::new(&self, target_model.clone());
+        let state = SimulationCtx::new(self, target_model.clone());
 
-        let result = model.handle_input(event, target_connector, state, route.from.clone());
+        let mut handler = model
+            .get_erased_input_handler(target_connector.as_ref())
+            .ok_or_else(|| RoutingError::UnknownModelConnector {
+                model: target_model.to_string(),
+                connector: target_connector.to_string(),
+            })?;
 
+        handler.apply_erased_event(event, state)?;
+        /* TODO: Handle after input event
         match result {
             InputEffect::Consume | InputEffect::Drop(_) => {}
             InputEffect::ScheduleInternal(time) => {
@@ -122,7 +129,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
                 };
                 self.handle_produced_event(target_model, event, default_target)?;
             }
-        }
+        }*/
 
         Ok(())
     }
@@ -140,7 +147,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
             for entry in scheduled {
                 match entry {
                     Scheduled::Internal(model_id) => {
-                        let state = SimulationCtx::new(&self, model_id.clone());
+                        let state = SimulationCtx::new(self, model_id.clone());
                         let default_target = if state.routes.outputs.len() == 1 {
                             state.routes.outputs.first().cloned()
                         } else {
@@ -151,12 +158,12 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
                                 id: model_id.to_string(),
                             })?;
 
+                        /* TODO: Handle after internal
                         let produced: Option<ProducedEvent<'_, E>> =
-                            match model.handle_change(state) {
+                            match model.handle_update(state) {
                                 ChangeEffect::None => None,
                                 ChangeEffect::ScheduleInternal(new_time) => {
-                                    self.scheduler
-                                        .schedule_internal(new_time, model_id.clone())?;
+                                    self.scheduler.schedule_change(new_time, model_id.clone())?;
                                     None
                                 }
                                 ChangeEffect::Produce(produced) => Some(produced),
@@ -165,6 +172,7 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
                         if let Some(event) = produced {
                             self.handle_produced_event(model_id, event, default_target)?;
                         }
+                        */
                     }
                     Scheduled::Event(event) => {
                         self.route_event(event)?;
@@ -186,12 +194,13 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
 pub struct SimulationCtx<'s> {
     pub time: SimulationTime,
     pub rng: Rc<RefCell<dyn SimulationRng>>,
-    pub owner: CowStr<'s>,
+    pub on_model: CowStr<'s>,
     pub routes: AdjacentModels<'s>,
+    pub scheduler: *mut Pin<Box<Scheduler<'s>>>,
 }
 
 impl<'s> SimulationCtx<'s> {
-    pub fn new<E: Event + 's>(simulation: &Simulation<'s, E>, owner: CowStr<'s>) -> Self {
+    pub fn new(simulation: &mut Simulation<'s>, owner: CowStr<'s>) -> Self {
         let routes = simulation
             .system
             .route_cache
@@ -200,27 +209,34 @@ impl<'s> SimulationCtx<'s> {
             .cloned()
             .unwrap_or_default();
 
+        let scheduler: *mut Pin<Box<Scheduler<'s>>> = &mut simulation.scheduler;
+
         SimulationCtx {
             time: simulation.current_time(),
             rng: simulation.global_rng.clone(),
-            owner,
+            on_model: owner,
             routes,
+            scheduler,
         }
     }
 
-    fn new_parameterized<E: Event + 's>(
+    fn new_parameterized(
         route_cache: &HashMap<CowStr<'s>, AdjacentModels<'s>>,
         time: SimulationTime,
         rng: Rc<RefCell<dyn SimulationRng>>,
         owner: CowStr<'s>,
+        scheduler: &mut Pin<Box<Scheduler<'s>>>,
     ) -> Self {
         let routes = route_cache.get(&owner).cloned().unwrap_or_default();
+
+        let scheduler: *mut Pin<Box<Scheduler<'s>>> = scheduler;
 
         SimulationCtx {
             time,
             rng,
-            owner,
+            on_model: owner,
             routes,
+            scheduler,
         }
     }
 
@@ -238,19 +254,112 @@ impl<'s> SimulationCtx<'s> {
     {
         self.rng.borrow_mut().gen_range(range)
     }
+
+    pub fn schedule_change(&self, time: TimeTrigger) {
+        unsafe {
+            (*self.scheduler).schedule_change(time.to_discrete(self.time), self.on_model.clone());
+        }
+    }
+
+    pub fn on_connector<'c>(&'s self, connector: CowStr<'s>) -> ConnectorCtx<'c, 's>
+    where
+        's: 'c,
+    {
+        ConnectorCtx {
+            sim: self,
+            on_connector: connector,
+        }
+    }
+
+    pub fn push_event_with_time_and_source<M: Message>(
+        &self,
+        event: Event<M>,
+        target: Option<ConnectorPath<'s>>,
+        time: impl Into<SimulationTime>,
+        source_connector: CowStr<'s>,
+    ) -> Result<(), SimulationError> {
+        let target = target
+            .or_else(|| match self.routes.outputs.first() {
+                Some(first) if self.routes.outputs.len() == 1 => Some(first.to.clone()),
+                _ => None,
+            })
+            .ok_or(RoutingError::MissingEventTarget {
+                model: self.on_model.to_string(),
+            })?;
+        let routed = RoutedEvent::new(
+            event,
+            Route {
+                from: EventSource::Model(ConnectorPath {
+                    model: self.on_model.clone(),
+                    connector: source_connector,
+                }),
+                to: target,
+            },
+        );
+        unsafe {
+            (*self.scheduler).schedule_event(time, routed)?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn push_event_with_source<M: Message>(
+        &self,
+        event: Event<M>,
+        target: Option<ConnectorPath<'s>>,
+        source_connector: CowStr<'s>,
+    ) -> Result<(), SimulationError> {
+        self.push_event_with_time_and_source(event, target, self.time, source_connector)
+    }
 }
 
-pub enum Scheduled<'s, E: Event> {
+pub struct ConnectorCtx<'c, 's> {
+    sim: &'c SimulationCtx<'s>,
+    pub on_connector: CowStr<'c>,
+}
+
+impl<'c, 's: 'c> ConnectorCtx<'c, 's> {
+    #[inline(always)]
+    pub fn push_event_with_time<M: Message>(
+        &self,
+        event: Event<M>,
+        target: Option<ConnectorPath<'c>>,
+        time: impl Into<SimulationTime>,
+    ) -> Result<(), SimulationError> {T
+        self.sim
+            .push_event_with_time_and_source(event, target, time, self.on_connector.clone())
+    }
+
+    #[inline(always)]
+    pub fn push_event<M: Message>(
+        &self,
+        event: Event<M>,
+        target: Option<ConnectorPath<'c>>,
+    ) -> Result<(), SimulationError> {
+        self.sim
+            .push_event_with_source(event, target, self.on_connector.clone())
+    }
+}
+
+impl<'c, 's: 'c> Deref for ConnectorCtx<'c, 's> {
+    type Target = SimulationCtx<'s>;
+
+    fn deref(&self) -> &Self::Target {
+        self.sim
+    }
+}
+
+pub enum Scheduled<'s> {
     Internal(CowStr<'s>),
-    Event(RoutedEvent<'s, E>),
+    Event(RoutedEvent<'s>),
 }
 
-pub struct Scheduler<'s, E: Event> {
+pub struct Scheduler<'s> {
     pub time: SimulationTime,
-    scheduled: BTreeMap<SimulationTime, Vec<Scheduled<'s, E>>>,
+    scheduled: BTreeMap<SimulationTime, Vec<Scheduled<'s>>>,
 }
 
-impl<'s, E: Event> Scheduler<'s, E> {
+impl<'s> Scheduler<'s> {
     pub fn new(current_time: SimulationTime) -> Self {
         Scheduler {
             time: current_time,
@@ -261,7 +370,7 @@ impl<'s, E: Event> Scheduler<'s, E> {
     fn schedule(
         &mut self,
         time: SimulationTime,
-        value: Scheduled<'s, E>,
+        value: Scheduled<'s>,
     ) -> Result<(), SchedulerError> {
         if time < self.time {
             return Err(SchedulerError::TimeRegression {
@@ -283,7 +392,7 @@ impl<'s, E: Event> Scheduler<'s, E> {
     }
 
     #[inline]
-    pub fn schedule_internal(
+    pub fn schedule_change(
         &mut self,
         time: impl Into<SimulationTime>,
         model: CowStr<'s>,
@@ -295,7 +404,7 @@ impl<'s, E: Event> Scheduler<'s, E> {
     pub fn schedule_event(
         &mut self,
         time: impl Into<SimulationTime>,
-        event: RoutedEvent<'s, E>,
+        event: RoutedEvent<'s>,
     ) -> Result<(), SchedulerError> {
         self.schedule(time.into(), Scheduled::Event(event))
     }
@@ -305,8 +414,8 @@ impl<'s, E: Event> Scheduler<'s, E> {
     }
 }
 
-impl<'s, E: Event> Iterator for Scheduler<'s, E> {
-    type Item = Vec<Scheduled<'s, E>>;
+impl<'s> Iterator for Scheduler<'s> {
+    type Item = Vec<Scheduled<'s>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (time, result) = self.scheduled.pop_first()?;

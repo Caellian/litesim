@@ -1,10 +1,11 @@
-use std::fmt::Debug;
+use std::{any::TypeId, fmt::Debug, marker::PhantomData, rc::Rc};
 
 use crate::{
-    event::{Event, ProducedEvent},
-    prelude::SimulationTime,
+    error::{RoutingError, SimulationError},
+    event::{Event, Message},
+    prelude::{ConnectorCtx, ErasedEvent},
     simulation::SimulationCtx,
-    util::CowStr,
+    util::{CowStr, HeterogeneousTuple},
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -33,46 +34,8 @@ impl Debug for ConnectorPath<'_> {
 macro_rules! connection {
     ($model:tt :: $connector:tt) => {
         ::litesim::model::ConnectorPath {
-            model: ::litesim::util::CowStr::Borrowed(stringify!($model)),
-            connector: ::litesim::util::CowStr::Borrowed(stringify!($connector)),
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! declare_connectors {
-    {input: [$($input: literal),*], output: [$($output: literal),*]} => {
-        fn input_connectors<'s>(&'s self) -> Vec<::litesim::util::CowStr<'s>> {
-            vec![$(::litesim::util::CowStr::Borrowed($input),
-            )*]
-        }
-        fn output_connectors<'s>(&'s self) -> Vec<::litesim::util::CowStr<'s>> {
-            vec![$(::litesim::util::CowStr::Borrowed($output),
-            )*]
-        }
-    };
-    {output: [$($output: literal),*], input: [$($input: literal),*]} => {
-        declare_connectors!{
-            input: [$($input),*],
-            output: [$($output),*]
-        }
-    };
-    {input: [$($input: literal),*]} => {
-        declare_connectors!{
-            input: [$($input),*],
-            output: []
-        }
-    };
-    {output: [$($output: literal),*]} => {
-        declare_connectors!{
-            input: [],
-            output: [$($output),*]
-        }
-    };
-    {} => {
-        declare_connectors!{
-            input: [],
-            output: []
+            model: std::borrow::Cow::Borrowed(stringify!($model)),
+            connector: std::borrow::Cow::Borrowed(stringify!($connector)),
         }
     };
 }
@@ -150,69 +113,327 @@ impl<'s> From<(&ConnectorPath<'s>, &ConnectorPath<'s>)> for Route<'s> {
     }
 }
 
-pub enum InputEffect<'a, E: Event> {
-    /// Signals that the model consumed input event
-    Consume,
-    /// Signals that the model dropped input event
-    Drop(E),
-    /// Signals that an internal change should occur at provided time
-    ScheduleInternal(SimulationTime),
-    /// Signals that an event was produced as a consequence of receiving input event
-    Produce(ProducedEvent<'a, E>),
+// FIXME: Lifetimes are all over the place.
+// Handlers assume connector lives as long as the simulation which isn't true
+
+trait EventConsumer<Ctx>: Fn(Event<Self::Msg>, Ctx) -> Result<Self::Ok, SimulationError> {
+    type Msg: Message;
+    type Ok;
+}
+trait InputHandler<'s>: EventConsumer<SimulationCtx<'s>, Msg = Self::In, Ok = bool> {
+    type In: Message;
+}
+impl<'s, F: EventConsumer<SimulationCtx<'s>, Ok = bool>> InputHandler<'s> for F {
+    type In = F::Msg;
 }
 
-pub enum ChangeEffect<'a, E: Event> {
-    /// Model state hasn't changed and requires no neighbor updates
-    None,
-    /// Signals that an internal change should occur at provided time
-    ScheduleInternal(SimulationTime),
-    /// Signals that an event was created
-    Produce(ProducedEvent<'a, E>),
+pub trait ErasedInputHandler<'s> {
+    fn apply_erased_event(
+        &self,
+        event: ErasedEvent,
+        ctx: SimulationCtx<'s>,
+    ) -> Result<(), RoutingError>;
+    fn in_type_id(&self) -> TypeId;
 }
 
-#[allow(unused_variables)]
-pub trait Model<E: Event> {
+impl<'s, C: InputHandler<'s>> ErasedInputHandler<'s> for C {
+    fn apply_erased_event(
+        &self,
+        event: ErasedEvent,
+        ctx: SimulationCtx<'s>,
+    ) -> Result<(), RoutingError> {
+        let casted = event
+            .try_restore_type()
+            .map_err(|got| RoutingError::InvalidEventType {
+                connector: std::any::type_name::<Self>(),
+                event_type: got.type_name,
+                expected: std::any::type_name::<C::In>(),
+            })?;
+        self(casted, ctx);
+        Ok(())
+    }
+
+    fn in_type_id(&self) -> TypeId {
+        TypeId::of::<C::In>()
+    }
+}
+
+type InputConnector<'s> = (&'static str, Rc<dyn ErasedInputHandler<'s>>);
+
+pub trait InputConnectorList<'s> {
+    fn get_entry(&self, n: usize) -> InputConnector<'s>;
+
+    fn iter<'a>(&'a self) -> InputConnectorIter<'a, 's, Self>
+    where
+        Self: Sized + HeterogeneousTuple,
+    {
+        InputConnectorIter {
+            over: self,
+            pos: 0,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+pub struct InputConnectorIter<'a, 's: 'a, L: InputConnectorList<'s> + HeterogeneousTuple> {
+    over: &'a L,
+    pos: u16,
+    _phantom: PhantomData<&'s ()>,
+}
+
+impl<'s, 'a: 's, L: InputConnectorList<'s> + HeterogeneousTuple> Iterator
+    for InputConnectorIter<'a, 's, L>
+{
+    type Item = InputConnector<'s>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.over.len() as u16 {
+            return None;
+        }
+        let result = self.over.get_entry(self.pos as usize);
+        self.pos += 1;
+        return Some(result);
+    }
+}
+
+trait OutputHandler<'c, 's: 'c>: EventConsumer<ConnectorCtx<'c, 's>, Msg = Self::Out, Ok = ()> {
+    type Out: Message;
+}
+impl<'c, 's: 'c, F: EventConsumer<ConnectorCtx<'c, 's>, Ok = ()>> OutputHandler<'c, 's> for F {
+    type Out = F::Msg;
+}
+
+pub trait ErasedOutputHandler<'s> {
+    fn apply_erased_event<'c: 's>(
+        &'c mut self,
+        event: ErasedEvent,
+        ctx: ConnectorCtx<'c, 's>,
+    ) -> Result<(), RoutingError>;
+    fn out_type_id(&self) -> TypeId;
+}
+
+impl<'c, 's: 'c, C: OutputHandler<'c, 's>> ErasedOutputHandler<'s> for C {
+    fn apply_erased_event<'a: 'c>(
+        &'a mut self,
+        event: ErasedEvent,
+        ctx: ConnectorCtx<'a, 's>,
+    ) -> Result<(), RoutingError> {
+        let casted = event
+            .try_restore_type()
+            .map_err(|got| RoutingError::InvalidEventType {
+                connector: std::any::type_name::<Self>(),
+                event_type: got.type_name,
+                expected: std::any::type_name::<C::Out>(),
+            })?;
+        self(casted, ctx);
+        Ok(())
+    }
+
+    fn out_type_id(&self) -> TypeId {
+        TypeId::of::<C::Out>()
+    }
+}
+
+type OutputConnector<'s> = (&'static str, Rc<dyn ErasedOutputHandler<'s>>);
+
+pub trait OutputConnectorList<'s> {
+    fn get_entry(&self, n: usize) -> OutputConnector<'s>;
+
+    fn iter<'i>(&'i self) -> OutputConnectorIter<'i, 's, Self>
+    where
+        Self: Sized + HeterogeneousTuple,
+    {
+        OutputConnectorIter {
+            over: self,
+            pos: 0,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+pub struct OutputConnectorIter<'i, 's: 'i, L: OutputConnectorList<'s> + HeterogeneousTuple> {
+    over: &'i L,
+    pos: u16,
+    _phantom: PhantomData<&'s ()>,
+}
+
+impl<'i, 'c, 's: 'c + 'i, L: OutputConnectorList<'s> + HeterogeneousTuple> Iterator
+    for OutputConnectorIter<'i, 's, L>
+{
+    type Item = OutputConnector<'s>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.over.len() as u16 {
+            return None;
+        }
+        let result = self.over.get_entry(self.pos as usize);
+        self.pos += 1;
+        return Some(result);
+    }
+}
+
+macro_rules! in_connector_tuple {
+    ($($size: literal => [$($n: tt : $sym: tt),*]),+) => {$(
+        impl<'s, $($sym: InputHandler<'s> + 'static),*> InputConnectorList<'s> for ($((&'static str, Rc<$sym>)),*) {
+            fn get_entry(&self, n: usize) -> InputConnector<'s> {
+                match n {
+                    $($n => return (self.$n.0, self.$n.1.clone()),)*
+                    _ => panic!("Invalid connector index"),
+                }
+            }
+        }
+    )+};
+}
+macro_rules! out_connector_tuple {
+    ($($size: literal => [$($n: tt : $sym: tt),*]),+) => {$(
+        impl<'c, 's: 'c, $($sym: OutputHandler<'c, 's> + 'static),*> OutputConnectorList<'s> for ($((&'static str, Rc<$sym>)),*) {
+            fn get_entry(&self, n: usize) -> OutputConnector<'s> {
+                match n {
+                    $($n => return (self.$n.0, self.$n.1.clone()),)*
+                    _ => panic!("Invalid connector index"),
+                }
+            }
+        }
+    )+};
+}
+macro_rules! connector_tuple {
+    ($($size: literal => [$($n: tt : $sym: tt),*]),+) => {
+        in_connector_tuple![$($size => [$($n: $sym),*]),+];
+        out_connector_tuple![$($size => [$($n: $sym),*]),+];
+    };
+}
+
+impl<'s, A: InputHandler<'s> + 'static> InputConnectorList<'s> for ((&'static str, Rc<A>),) {
+    fn get_entry(&self, n: usize) -> InputConnector<'s> {
+        match n {
+            0 => return (self.0 .0, self.0 .1.clone()),
+            _ => panic!("Invalid connector index"),
+        }
+    }
+}
+impl<'c, 's: 'c, A: OutputHandler<'c, 's> + 'static> OutputConnectorList<'s>
+    for ((&'static str, Rc<A>),)
+{
+    fn get_entry(&self, n: usize) -> OutputConnector<'s> {
+        match n {
+            0 => return (self.0 .0, self.0 .1.clone()),
+            _ => panic!("Invalid connector index"),
+        }
+    }
+}
+
+connector_tuple![
+    0 => [],
+    2 => [0: A, 1: B],
+    3 => [0: A, 1: B, 2: C],
+    4 => [0: A, 1: B, 2: C, 3: D],
+    5 => [0: A, 1: B, 2: C, 3: D, 4: E],
+    6 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F],
+    7 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G],
+    8 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H],
+    9 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I],
+    10 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J],
+    11 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K],
+    12 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K, 11: L]
+];
+
+#[macro_export]
+macro_rules! push {
+    ($ctx: ident, $id: literal, $msg: expr) => {{
+        let connector_ctx = ctx.on_connector($id);
+        connector_ctx.push_event(::litesim::event::Event::new($msg), None)?;
+        Ok(())
+    }};
+    ($ctx: ident, $id: literal, $msg: expr, $time: expr) => {{
+        let connector_ctx = ctx.on_connector($id);
+        connector_ctx.push_event_with_time(::litesim::event::Event::new($msg), $time, None)?;
+        Ok(())
+    }};
+    ($ctx: ident, $id: literal, $msg: expr, Now, $target: literal) => {{
+        let connector_ctx = ctx.on_connector($id);
+        connector_ctx.push_event(
+            ::litesim::event::Event::new($msg),
+            Some(::litesim::prelude::CowStr::Borrowed($target)),
+        )?;
+        Ok(())
+    }};
+    ($ctx: ident, $id: literal, $msg: expr, $time: expr, $target: literal) => {{
+        let connector_ctx = ctx.on_connector($id);
+        connector_ctx.push_event_with_time(
+            ::litesim::event::Event::new($msg),
+            $time,
+            Some(::litesim::prelude::CowStr::Borrowed($target)),
+        )?;
+        Ok(())
+    }};
+}
+
+pub trait Model<'s> {
+    type I: InputConnectorList<'s> + HeterogeneousTuple + 'static;
+    type O: OutputConnectorList<'s> + HeterogeneousTuple + 'static;
+
     /// Lists all model input connectors
-    fn input_connectors<'s>(&'s self) -> Vec<CowStr<'s>>;
+    fn input_connectors(&'s self) -> Self::I;
     /// Lists all model output connectors
-    fn output_connectors<'s>(&'s self) -> Vec<CowStr<'s>>;
+    fn output_connectors(&'s self) -> Self::O;
 
-    /// Returns true if this model has given input connector
-    fn has_input_connector<'s>(&'s self, id: &str) -> bool {
-        self.input_connectors()
-            .into_iter()
-            .find(|c| c.as_ref() == id)
-            .is_some()
-    }
-    fn has_output_connector<'s>(&'s self, id: &str) -> bool {
-        self.output_connectors()
-            .into_iter()
-            .find(|c| c.as_ref() == id)
-            .is_some()
-    }
-
-    /// Handler for external event inputs.
-    #[must_use]
-    fn handle_input<'s>(
-        &mut self,
-        event: E,
-        connector: CowStr<'s>,
-        ctx: SimulationCtx,
-        source: EventSource<'s>,
-    ) -> InputEffect<'s, E> {
-        InputEffect::Drop(event)
-    }
-    /// Handler for internal model changes when the elapsed time is supposed to affect
-    /// the state of the model.
-    #[must_use]
-    fn handle_change<'s>(&mut self, ctx: SimulationCtx<'s>) -> ChangeEffect<'s, E> {
-        ChangeEffect::None
-    }
-    /// Returns time of next expected internal change.
+    /// Called during initalization.
     ///
-    /// This method is allowed to modify the model to store the returned value.
-    #[must_use]
-    fn next_change_time<'s>(&mut self, ctx: SimulationCtx<'s>) -> Option<SimulationTime> {
-        None
+    /// This method allows models like generators to schedule inital changes.
+    #[allow(unused_variables)]
+    fn init(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+        Ok(())
+    }
+
+    /// Handler for internal model changes when the elapsed time is supposed to affect
+    /// the state of the model.'
+    fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError>;
+}
+
+pub trait ErasedModel<'s> {
+    fn get_erased_input_handler<'a>(&'a self, id: &str) -> Option<Rc<dyn ErasedInputHandler<'s>>>
+    where
+        's: 'a;
+    fn get_erased_output_handler<'a, 'c: 'a>(
+        &'a self,
+        id: &str,
+    ) -> Option<Rc<dyn ErasedOutputHandler<'s>>>
+    where
+        's: 'a;
+
+    fn erased_init(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError>;
+    fn erased_handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError>;
+}
+
+impl<'s, M: Model<'s>> ErasedModel<'s> for M {
+    fn get_erased_input_handler<'a>(&'a self, id: &str) -> Option<Rc<dyn ErasedInputHandler<'s>>>
+    where
+        's: 'a,
+    {
+        self.input_connectors()
+            .iter()
+            .find(|it| it.0 == id)
+            .map(|it| it.1.clone())
+    }
+
+    fn get_erased_output_handler<'a, 'c: 'a>(
+        &'a self,
+        id: &str,
+    ) -> Option<Rc<dyn ErasedOutputHandler<'s>>>
+    where
+        's: 'a,
+    {
+        self.output_connectors()
+            .iter()
+            .find(|it| it.0 == id)
+            .map(|it| it.1.clone())
+    }
+
+    fn erased_init(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+        self.init(ctx)
+    }
+
+    fn erased_handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+        self.handle_update(ctx)
     }
 }

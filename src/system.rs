@@ -8,28 +8,27 @@ use std::{
 
 use crate::{
     error::ValidationError,
-    event::Event,
-    model::{ConnectorPath, Model, Route},
+    model::{ConnectorPath, ErasedModel, Route},
     util::CowStr,
 };
 
 pub(crate) type IdStore<'s, Value> = HashMap<CowStr<'s>, Value>;
-pub(crate) type ModelStore<'s, Event> = IdStore<'s, Box<dyn Model<Event>>>;
+pub(crate) type ModelStore<'s> = IdStore<'s, Box<dyn ErasedModel<'s>>>;
 
-pub struct SystemModel<'s, E: Event> {
-    pub models: ModelStore<'s, E>,
+pub struct SystemModel<'s> {
+    pub models: ModelStore<'s>,
     pub routes: HashMap<ConnectorPath<'s>, ConnectorPath<'s>>,
     pub validated: RefCell<bool>,
     pub(crate) route_cache: RefCell<IdStore<'s, AdjacentModels<'s>>>,
 }
 
-impl<'s, E: Event> Default for SystemModel<'s, E> {
+impl<'s> Default for SystemModel<'s> {
     fn default() -> Self {
         SystemModel::new()
     }
 }
 
-impl<'s, E: Event> SystemModel<'s, E> {
+impl<'s> SystemModel<'s> {
     pub fn new() -> Self {
         Self {
             models: HashMap::new(),
@@ -39,15 +38,9 @@ impl<'s, E: Event> SystemModel<'s, E> {
         }
     }
 
-    pub fn push_model(&mut self, id: impl AsRef<str>, model: impl Model<E> + 'static) {
+    pub fn push_model(&mut self, id: impl AsRef<str>, model: impl ErasedModel<'s> + 'static) {
         self.models
             .insert(CowStr::Owned(id.as_ref().to_string()), Box::new(model));
-        *self.validated.borrow_mut() = false;
-    }
-
-    pub fn push_boxed_model(&mut self, id: impl AsRef<str>, model: Box<dyn Model<E>>) {
-        self.models
-            .insert(CowStr::Owned(id.as_ref().to_string()), model);
         *self.validated.borrow_mut() = false;
     }
 
@@ -73,12 +66,15 @@ impl<'s, E: Event> SystemModel<'s, E> {
         }
 
         for (a, b) in self.routes.iter() {
-            if let Some(model_a) = self.models.get(a.model.as_ref()) {
-                if !model_a.has_output_connector(a.connector.as_ref()) {
-                    return Err(ValidationError::MissingConnector {
-                        model: a.model.to_string(),
-                        id: a.connector.to_string(),
-                    });
+            let output = if let Some(model_a) = self.models.get(a.model.as_ref()) {
+                match model_a.get_erased_output_handler(a.connector.as_ref()) {
+                    Some(it) => it.out_type_id(),
+                    None => {
+                        return Err(ValidationError::MissingConnector {
+                            model: a.model.to_string(),
+                            id: a.connector.to_string(),
+                        })
+                    }
                 }
             } else {
                 return Err(ValidationError::MissingModel {
@@ -87,11 +83,23 @@ impl<'s, E: Event> SystemModel<'s, E> {
             };
 
             if let Some(model_b) = self.models.get(b.model.as_ref()) {
-                if !model_b.has_input_connector(b.connector.as_ref()) {
-                    return Err(ValidationError::MissingConnector {
-                        model: b.model.to_string(),
-                        id: b.connector.to_string(),
-                    });
+                match model_b.get_erased_output_handler(b.connector.as_ref()) {
+                    Some(it) => {
+                        if it.out_type_id() != output {
+                            return Err(ValidationError::ConnectionTypeMismatch {
+                                output_model: b.model.to_string(),
+                                output_connector: b.connector.to_string(),
+                                input_model: a.model.to_string(),
+                                input_connector: a.connector.to_string(),
+                            });
+                        }
+                    }
+                    None => {
+                        return Err(ValidationError::MissingConnector {
+                            model: b.model.to_string(),
+                            id: b.connector.to_string(),
+                        })
+                    }
                 }
             } else {
                 return Err(ValidationError::MissingModel {
@@ -117,9 +125,9 @@ impl<'s, E: Event> SystemModel<'s, E> {
 
             for route in self.routes() {
                 if route.ends_in_model(&id) {
-                    inputs.push(route.from_connection());
+                    inputs.push(route.clone());
                 } else if route.starts_in_model(&id) {
-                    outputs.push(route.to);
+                    outputs.push(route.clone());
                 }
             }
             cache.insert(id.clone(), AdjacentModels { inputs, outputs });
@@ -129,8 +137,8 @@ impl<'s, E: Event> SystemModel<'s, E> {
 
 #[derive(Clone)]
 pub struct AdjacentModels<'s> {
-    pub inputs: Vec<ConnectorPath<'s>>,
-    pub outputs: Vec<ConnectorPath<'s>>,
+    pub inputs: Vec<Route<'s>>,
+    pub outputs: Vec<Route<'s>>,
 }
 
 impl<'s> Default for AdjacentModels<'s> {
@@ -142,21 +150,21 @@ impl<'s> Default for AdjacentModels<'s> {
     }
 }
 
-pub(crate) struct BorrowedModel<'s, E: Event> {
-    owner: *mut Pin<Box<SystemModel<'s, E>>>,
+pub(crate) struct BorrowedModel<'s> {
+    owner: *mut Pin<Box<SystemModel<'s>>>,
     id: CowStr<'s>,
-    model: MaybeUninit<Box<dyn Model<E>>>,
+    model: MaybeUninit<Box<dyn ErasedModel<'s>>>,
 }
 
-impl<'s, E: Event> BorrowedModel<'s, E> {
-    pub fn new(owner: &mut Pin<Box<SystemModel<'s, E>>>, id: CowStr<'s>) -> Option<Self> {
+impl<'s> BorrowedModel<'s> {
+    pub fn new(owner: &mut Pin<Box<SystemModel<'s>>>, id: CowStr<'s>) -> Option<Self> {
         let model = MaybeUninit::new(owner.as_mut().models.remove(id.as_ref())?);
 
         Some(BorrowedModel { owner, id, model })
     }
 }
 
-impl<'s, E: Event> Drop for BorrowedModel<'s, E> {
+impl<'s> Drop for BorrowedModel<'s> {
     fn drop(&mut self) {
         unsafe {
             let mut model = MaybeUninit::uninit();
@@ -168,15 +176,15 @@ impl<'s, E: Event> Drop for BorrowedModel<'s, E> {
     }
 }
 
-impl<E: Event> Deref for BorrowedModel<'_, E> {
-    type Target = dyn Model<E>;
+impl<'s> Deref for BorrowedModel<'s> {
+    type Target = dyn ErasedModel<'s>;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.model.assume_init_ref().as_ref() }
     }
 }
 
-impl<E: Event> DerefMut for BorrowedModel<'_, E> {
+impl DerefMut for BorrowedModel<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.model.assume_init_mut().as_mut() }
     }
