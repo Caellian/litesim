@@ -116,7 +116,7 @@ impl<'a> ProducedEvent<'a> {
             event: self.event,
             source_connector: self.source_connector,
             target: self.target,
-            scheduling: TimeTrigger::At { time },
+            scheduling: TimeTrigger::At(time),
         }
     }
 
@@ -125,7 +125,7 @@ impl<'a> ProducedEvent<'a> {
             event: self.event,
             source_connector: self.source_connector,
             target: self.target,
-            scheduling: TimeTrigger::In { delay },
+            scheduling: TimeTrigger::In(delay),
         }
     }
 }

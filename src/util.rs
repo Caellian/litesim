@@ -110,3 +110,13 @@ impl_heterogeneous_tuple![
 pub trait EraseTyping<Erased> {
     fn erase_typing(self) -> Erased;
 }
+
+/*
+MAPT<Vararg, (ABC) => ((X, A), (X, B))>
+
+- happens at compile time, not codegen time
+- We need to know that I is in fact a tuple, and iterate over its types which isn't something we can do with macros
+  - I needs to be partially evaluated by rustc
+
+fn derp<>
+ */

@@ -1,50 +1,31 @@
+use std::rc::Rc;
+
 use litesim::prelude::*;
 
 pub struct PingPongEvent;
 
 pub struct Player;
 
-impl Model for Player {
-    /*
-    declare_connectors! {
-        input: ["recieve"],
-        output: ["send"]
+fn recieve_handler(_: PingPongEvent, ctx: SimulationCtx) -> Result<(), SimulationError> {
+    ctx.schedule_change(In(ctx.rand_range(0.0..1.0)));
+    Ok(())
+}
+
+impl<'s> Model<'s> for Player {
+    type I = ((&'static str, Rc<dyn ErasedInputHandler<'s>>),);
+    type O = ();
+
+    fn input_connectors(&self) -> Self::I {
+        (("receive", Rc::new(recieve_handler)),)
     }
 
-    fn handle_input<'s>(
-        &mut self,
-        _event: PingPongEvent,
-        connector: litesim::util::CowStr<'s>,
-        sim: SimulationCtx,
-        source: EventSource<'s>,
-    ) -> InputEffect<'s, PingPongEvent> {
-        log::info!(
-            "Player {} received ball on connector: {}, from {:?}, at: {}",
-            sim.current,
-            connector,
-            source,
-            sim.time,
-        );
-        InputEffect::ScheduleInternal(sim.time + sim.rand_range(0.0..1.0))
-    }
-
-    fn handle_update<'s>(&mut self, sim: SimulationCtx<'s>) -> ChangeEffect<'s, PingPongEvent> {
-        log::info!("Player {} bounced at: {}", sim.current, sim.time);
-        ChangeEffect::Produce(ProducedEvent::new_instant(PingPongEvent, "send", None))
-    } */
-
-    fn input_connectors<'s>(&self) -> Self::I {
-        (("", |e: PingPongEvent, ctx: SimulationCtx| {
-            ctx.push_event_with_source(event, target, source_connector)
-        }),)
-    }
-
-    fn output_connectors<'s>(&self) -> Self::O {
+    fn output_connectors(&self) -> Self::O {
         ()
     }
 
-    fn handle_update<'s>(&mut self, ctx: SimulationCtx<'s>) {
-        push!(ctx, "send", PingPongEvent)
+    fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+        // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
+        push_event!(ctx, "send", PingPongEvent)
     }
 }
 
@@ -58,15 +39,15 @@ fn main() {
     system.push_model("p1", Player);
     system.push_model("p2", Player);
 
-    system.push_route(route!(p1::send -> p2::recieve));
-    system.push_route(route!(p2::send -> p1::recieve));
+    system.push_route(route!(p1::send -> p2::receive));
+    system.push_route(route!(p2::send -> p1::receive));
 
     let mut sim = Simulation::new(rand::thread_rng(), system, 0.0).expect("invalid model");
 
     sim.scheduler_mut()
         .schedule_event(
             0.5,
-            RoutedEvent::new_external(PingPongEvent, connection!(p1::recieve)),
+            RoutedEvent::new_external(Event::new(PingPongEvent), connection!(p1::recieve)),
         )
         .expect("unable to schedule initial event");
 

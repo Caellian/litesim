@@ -313,9 +313,9 @@ impl<'s> SimulationCtx<'s> {
     }
 }
 
-pub struct ConnectorCtx<'c, 's> {
+pub struct ConnectorCtx<'c, 's: 'c> {
     sim: &'c SimulationCtx<'s>,
-    pub on_connector: CowStr<'c>,
+    pub on_connector: CowStr<'s>,
 }
 
 impl<'c, 's: 'c> ConnectorCtx<'c, 's> {
@@ -323,7 +323,7 @@ impl<'c, 's: 'c> ConnectorCtx<'c, 's> {
     pub fn push_event_with_time<M: Message>(
         &self,
         event: Event<M>,
-        target: Option<ConnectorPath<'c>>,
+        target: Option<ConnectorPath<'s>>,
         time: impl Into<SimulationTime>,
     ) -> Result<(), SimulationError> {
         self.sim
@@ -334,7 +334,7 @@ impl<'c, 's: 'c> ConnectorCtx<'c, 's> {
     pub fn push_event<M: Message>(
         &self,
         event: Event<M>,
-        target: Option<ConnectorPath<'c>>,
+        target: Option<ConnectorPath<'s>>,
     ) -> Result<(), SimulationError> {
         self.sim
             .push_event_with_source(event, target, self.on_connector.clone())
