@@ -1,13 +1,11 @@
-use std::{any::TypeId, fmt::Debug, marker::PhantomData, rc::Rc};
-
-use rand::seq::index;
+use std::{any::TypeId, fmt::Debug};
 
 use crate::{
     error::{RoutingError, SimulationError},
     event::{Event, Message},
-    prelude::{ConnectorCtx, ErasedEvent},
+    prelude::ErasedEvent,
     simulation::SimulationCtx,
-    util::{CowStr, HeterogeneousTuple},
+    util::CowStr,
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -115,7 +113,9 @@ impl<'s> From<(&ConnectorPath<'s>, &ConnectorPath<'s>)> for Route<'s> {
     }
 }
 
-pub trait InputHandler<'s>: Fn(Event<Self::In>, SimulationCtx<'s>) -> Result<(), SimulationError> {
+pub trait InputHandler<'s>:
+    Fn(Event<Self::In>, SimulationCtx<'s>) -> Result<(), SimulationError>
+{
     type In: Message;
 }
 impl<'s, M: Message> InputHandler<'s>
@@ -125,16 +125,16 @@ impl<'s, M: Message> InputHandler<'s>
 }
 
 pub trait ErasedInputHandler<'s> {
-    fn apply_erased_event(
+    fn apply_event(
         &self,
         event: ErasedEvent,
         ctx: SimulationCtx<'s>,
     ) -> Result<(), SimulationError>;
-    fn in_type_id(&self) -> TypeId;
+    fn type_id(&self) -> TypeId;
 }
 
 impl<'s, C: InputHandler<'s>> ErasedInputHandler<'s> for C {
-    fn apply_erased_event(
+    fn apply_event(
         &self,
         event: ErasedEvent,
         ctx: SimulationCtx<'s>,
@@ -150,201 +150,18 @@ impl<'s, C: InputHandler<'s>> ErasedInputHandler<'s> for C {
         Ok(())
     }
 
-    fn in_type_id(&self) -> TypeId {
+    fn type_id(&self) -> TypeId {
         TypeId::of::<C::In>()
     }
 }
 
-/*
-type InputConnector<'s> = (&'static str, Rc<dyn ErasedInputHandler<'s>>);
-
-pub trait InputConnectorList<'s> {
-    fn get_entry(&self, n: usize) -> InputConnector<'s>;
-
-    fn iter<'a>(&'a self) -> InputConnectorIter<'a, 's, Self>
-    where
-        Self: Sized + HeterogeneousTuple,
-    {
-        InputConnectorIter {
-            over: self,
-            pos: 0,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-pub struct InputConnectorIter<'a, 's: 'a, L: InputConnectorList<'s> + HeterogeneousTuple> {
-    over: &'a L,
-    pos: u16,
-    _phantom: PhantomData<&'s ()>,
-}
-
-impl<'a, 's: 'a, L: InputConnectorList<'s> + HeterogeneousTuple> Iterator
-    for InputConnectorIter<'a, 's, L>
-{
-    type Item = InputConnector<'s>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.over.len() as u16 {
-            return None;
-        }
-        let result = self.over.get_entry(self.pos as usize);
-        self.pos += 1;
-        return Some(result);
-    }
-}*/
-
-/*
-trait OutputHandler<'c, 's: 'c>: EventConsumer<ConnectorCtx<'c, 's>, Msg = Self::Out, Ok = ()> {
-    type Out: Message;
-}
-impl<'c, 's: 'c, F: EventConsumer<ConnectorCtx<'c, 's>, Ok = ()>> OutputHandler<'c, 's> for F {
-    type Out = F::Msg;
-}
-
-pub trait ErasedOutputHandler<'s> {
-    fn apply_erased_event<'c: 's>(
-        &'c mut self,
-        event: ErasedEvent,
-        ctx: ConnectorCtx<'c, 's>,
-    ) -> Result<(), SimulationError>;
-    fn out_type_id(&self) -> TypeId;
-}
-
-impl<'c, 's: 'c, C: OutputHandler<'c, 's>> ErasedOutputHandler<'s> for C {
-    fn apply_erased_event<'a: 'c>(
-        &'a mut self,
-        event: ErasedEvent,
-        ctx: ConnectorCtx<'a, 's>,
-    ) -> Result<(), SimulationError> {
-        let casted = event
-            .try_restore_type()
-            .map_err(|got| RoutingError::InvalidEventType {
-                connector: std::any::type_name::<Self>(),
-                event_type: got.type_name,
-                expected: std::any::type_name::<C::Out>(),
-            })?;
-        self(casted, ctx)?;
-        Ok(())
-    }
-
-    fn out_type_id(&self) -> TypeId {
-        TypeId::of::<C::Out>()
-    }
-}
-
-type OutputConnector<'s> = (&'static str, Rc<dyn ErasedOutputHandler<'s>>);
-
-pub trait OutputConnectorList<'s> {
-    fn get_entry(&self, n: usize) -> OutputConnector<'s>;
-
-    fn iter<'i>(&'i self) -> OutputConnectorIter<'i, 's, Self>
-    where
-        Self: Sized + HeterogeneousTuple,
-    {
-        OutputConnectorIter {
-            over: self,
-            pos: 0,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-pub struct OutputConnectorIter<'i, 's: 'i, L: OutputConnectorList<'s> + HeterogeneousTuple> {
-    over: &'i L,
-    pos: u16,
-    _phantom: PhantomData<&'s ()>,
-}
-
-impl<'i, 'c, 's: 'c + 'i, L: OutputConnectorList<'s> + HeterogeneousTuple> Iterator
-    for OutputConnectorIter<'i, 's, L>
-{
-    type Item = OutputConnector<'s>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.over.len() as u16 {
-            return None;
-        }
-        let result = self.over.get_entry(self.pos as usize);
-        self.pos += 1;
-        return Some(result);
-    }
-} */
-
-/*
-macro_rules! in_connector_tuple {
-    ($($size: literal => [$($n: tt : $sym: tt),*]),+) => {$(
-        impl<'s, $($sym: InputHandler<'s>),*> InputConnectorList<'s> for ($((&'static str, Rc<$sym>)),*) {
-            fn get_entry(&self, n: usize) -> InputConnector<'s> {
-                match n {
-                    $($n => return (self.$n.0, self.$n.1.clone()),)*
-                    _ => panic!("Invalid connector index"),
-                }
-            }
-        }
-    )+};
-}
-macro_rules! out_connector_tuple {
-    ($($size: literal => [$($n: tt : $sym: tt),*]),+) => {$(
-        impl<'c, 's: 'c, $($sym: OutputHandler<'c, 's>),*> OutputConnectorList<'s> for ($((&'static str, Rc<$sym>)),*) {
-            fn get_entry(&self, n: usize) -> OutputConnector<'s> {
-                match n {
-                    $($n => return (self.$n.0, self.$n.1.clone()),)*
-                    _ => panic!("Invalid connector index"),
-                }
-            }
-        }
-    )+};
-}
-macro_rules! connector_tuple {
-    ($($size: literal => [$($n: tt : $sym: tt),*]),+) => {
-        in_connector_tuple![$($size => [$($n: $sym),*]),+];
-        out_connector_tuple![$($size => [$($n: $sym),*]),+];
-    };
-}
-
-impl<'s, A: InputHandler<'s> + 'static> InputConnectorList<'s> for ((&'static str, Rc<A>),) {
-    fn get_entry(&self, n: usize) -> InputConnector<'s> {
-        match n {
-            0 => return (self.0 .0, self.0 .1.clone()),
-            _ => panic!("Invalid connector index"),
-        }
-    }
-}
-impl<'c, 's: 'c, A: OutputHandler<'c, 's> + 'static> OutputConnectorList<'s>
-    for ((&'static str, Rc<A>),)
-{
-    fn get_entry(&self, n: usize) -> OutputConnector<'s> {
-        match n {
-            0 => return (self.0 .0, self.0 .1.clone()),
-            _ => panic!("Invalid connector index"),
-        }
-    }
-}
-
-connector_tuple![
-    0 => [],
-    2 => [0: A, 1: B],
-    3 => [0: A, 1: B, 2: C],
-    4 => [0: A, 1: B, 2: C, 3: D],
-    5 => [0: A, 1: B, 2: C, 3: D, 4: E],
-    6 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F],
-    7 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G],
-    8 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H],
-    9 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I],
-    10 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J],
-    11 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K],
-    12 => [0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K, 11: L]
-];
-
-*/
-pub struct ConnectorInfo(pub &'static str, pub TypeId);
+pub struct OutputConnectorInfo(pub &'static str, pub TypeId);
 
 pub trait Model<'s> {
     /// Lists all model input connectors
-    fn input_connectors(&self) -> &'static [ConnectorInfo];
+    fn input_connectors(&self) -> &'static [&'static str];
     /// Lists all model output connectors
-    fn output_connectors(&self) -> &'static [ConnectorInfo];
+    fn output_connectors(&self) -> &'static [OutputConnectorInfo];
 
     fn get_input_handler(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'s>>>;
 
@@ -362,20 +179,6 @@ pub trait Model<'s> {
 }
 
 pub(crate) trait ModelImpl<'s>: Model<'s> {
-    fn input_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
-        self.input_connectors()
-            .iter()
-            .find(|it| it.0 == name.as_ref())
-            .map(|it| it.1.clone())
-    }
-
-    fn output_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
-        self.output_connectors()
-            .iter()
-            .find(|it| it.0 == name.as_ref())
-            .map(|it| it.1.clone())
-    }
-
     fn get_input_handler_by_name(
         &self,
         name: impl AsRef<str>,
@@ -383,9 +186,21 @@ pub(crate) trait ModelImpl<'s>: Model<'s> {
         self.input_connectors()
             .iter()
             .enumerate()
-            .find(|(_, it)| it.0 == name.as_ref())
+            .find(|(_, it)| **it == name.as_ref())
             .map(|it| it.0)
             .and_then(|i| self.get_input_handler(i))
+    }
+
+    fn input_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
+        let handler = self.get_input_handler_by_name(name)?;
+        Some(handler.type_id())
+    }
+
+    fn output_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
+        self.output_connectors()
+            .iter()
+            .find(|it| it.0 == name.as_ref())
+            .map(|it| it.1.clone())
     }
 }
 

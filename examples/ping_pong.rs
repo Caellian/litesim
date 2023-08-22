@@ -6,15 +6,16 @@ pub struct Player;
 
 //FIXME: 's doesn't outlive 'static
 impl<'s: 'static> Model<'s> for Player {
-    fn input_connectors(&self) -> &'static [ConnectorInfo] {
-        static RESULT: &[ConnectorInfo] =
-            &[ConnectorInfo("receive", const_type_id::<PingPongEvent>())];
+    fn input_connectors(&self) -> &'static [&'static str] {
+        static RESULT: &[&'static str] = &["receive"];
         RESULT
     }
 
-    fn output_connectors(&self) -> &'static [ConnectorInfo] {
-        static RESULT: &[ConnectorInfo] =
-            &[ConnectorInfo("send", const_type_id::<PingPongEvent>())];
+    fn output_connectors(&self) -> &'static [OutputConnectorInfo] {
+        static RESULT: &[OutputConnectorInfo] = &[OutputConnectorInfo(
+            "send",
+            const_type_id::<PingPongEvent>(),
+        )];
         RESULT
     }
 

@@ -10,13 +10,14 @@ use rand::Rng;
 
 use crate::{
     error::{RoutingError, SchedulerError, SimulationError},
-    event::{Event, Message, ProducedEvent, RoutedEvent},
+    event::{Event, Message, RoutedEvent},
     model::{ConnectorPath, EventSource, ModelImpl, Route},
     system::{AdjacentModels, BorrowedModel, SystemModel},
     time::{SimulationTime, TimeTrigger},
     util::{CowStr, SimulationRng},
 };
 
+#[allow(dead_code)]
 pub struct Simulation<'s> {
     global_rng: Rc<RefCell<dyn SimulationRng>>,
     system: Pin<Box<SystemModel<'s>>>,
@@ -46,7 +47,7 @@ impl<'s> Simulation<'s> {
                 &mut scheduler,
             );
 
-            model.init(sim_ref);
+            model.init(sim_ref)?;
         }
 
         Ok(Simulation {
@@ -69,25 +70,6 @@ impl<'s> Simulation<'s> {
         self.scheduler.time
     }
 
-    fn handle_produced_event(
-        &mut self,
-        model_id: CowStr<'s>,
-        event: ProducedEvent<'s>,
-        default_target: Option<ConnectorPath<'s>>,
-    ) -> Result<(), SimulationError> {
-        let scheduling = event.scheduling.clone();
-        let routed = RoutedEvent::from_produced(model_id, event, default_target)?;
-        let time = self.initial_time.clone();
-        match scheduling {
-            TimeTrigger::Now => self.route_event(routed)?,
-            scheduling => self
-                .scheduler
-                .schedule_event(scheduling.to_discrete(time), routed)?,
-        }
-
-        Ok(())
-    }
-
     pub fn route_event(&mut self, event: RoutedEvent<'s>) -> Result<(), SimulationError> {
         let RoutedEvent { event, route } = event;
         let target_model = route.to.model.clone();
@@ -107,30 +89,7 @@ impl<'s> Simulation<'s> {
                 connector: target_connector.to_string(),
             })?;
 
-        handler.apply_erased_event(event, state)?;
-        /* TODO: Handle after input event
-        match result {
-            InputEffect::Consume | InputEffect::Drop(_) => {}
-            InputEffect::ScheduleInternal(time) => {
-                self.scheduler.schedule_internal(time, target_model)?;
-            }
-            InputEffect::Produce(event) => {
-                let adjacent = self
-                    .system
-                    .route_cache
-                    .borrow()
-                    .get(&target_model)
-                    .cloned()
-                    .unwrap_or_default();
-                let default_target = if adjacent.outputs.len() == 1 {
-                    adjacent.outputs.first().cloned()
-                } else {
-                    None
-                };
-                self.handle_produced_event(target_model, event, default_target)?;
-            }
-        }*/
-
+        handler.apply_event(event, state)?;
         Ok(())
     }
 
@@ -148,32 +107,12 @@ impl<'s> Simulation<'s> {
                 match entry {
                     Scheduled::Internal(model_id) => {
                         let state = SimulationCtx::new(self, model_id.clone());
-                        let default_target = if state.routes.outputs.len() == 1 {
-                            state.routes.outputs.first().cloned()
-                        } else {
-                            None
-                        };
                         let mut model = BorrowedModel::new(&mut self.system, model_id.clone())
                             .ok_or(SimulationError::ModelNotFound {
                                 id: model_id.to_string(),
                             })?;
 
                         model.handle_update(state)?;
-                        /* TODO: Handle after internal
-                        let produced: Option<ProducedEvent<'_, E>> =
-                            match model.handle_update(state) {
-                                ChangeEffect::None => None,
-                                ChangeEffect::ScheduleInternal(new_time) => {
-                                    self.scheduler.schedule_change(new_time, model_id.clone())?;
-                                    None
-                                }
-                                ChangeEffect::Produce(produced) => Some(produced),
-                            };
-
-                        if let Some(event) = produced {
-                            self.handle_produced_event(model_id, event, default_target)?;
-                        }
-                        */
                     }
                     Scheduled::Event(event) => {
                         self.route_event(event)?;
@@ -289,17 +228,18 @@ impl<'s> SimulationCtx<'s> {
             .ok_or(RoutingError::MissingEventTarget {
                 model: self.on_model.to_string(),
             })?;
-        let routed = RoutedEvent::new(
-            event,
-            Route {
-                from: EventSource::Model(ConnectorPath {
-                    model: self.on_model.clone(),
-                    connector: source_connector,
-                }),
-                to: target,
-            },
-        );
         unsafe {
+            let routed = RoutedEvent::new(
+                event.erase_message_type(),
+                Route {
+                    from: EventSource::Model(ConnectorPath {
+                        model: self.on_model.clone(),
+                        connector: source_connector,
+                    }),
+                    to: target,
+                },
+            );
+
             (*self.scheduler).schedule_event(time, routed)?;
         }
         Ok(())

@@ -4,15 +4,12 @@ use std::{
 };
 
 use crate::{
-    error::RoutingError,
     model::{ConnectorPath, Route},
-    prelude::{EventSource, TimeTrigger},
-    time::{SimDuration, SimTimeValue},
-    util::{CowStr, EraseTyping, NotUnit, ToCowStr},
+    prelude::EventSource,
 };
 
 pub trait Message: Any {}
-impl<T> Message for T where T: Any + NotUnit {}
+impl<T> Message for T where T: Any {}
 
 pub struct Event<M: Message> {
     type_info: TypeId,
@@ -41,13 +38,7 @@ impl<M: Message> Event<M> {
     }
 }
 
-impl<M: Message> EraseTyping<ErasedEvent> for Event<M> {
-    fn erase_typing(self) -> ErasedEvent {
-        unsafe { self.erase_message_type() }
-    }
-}
-
-pub(crate) struct ErasedMessage;
+struct ErasedMessage;
 pub struct ErasedEvent {
     pub(crate) type_id: TypeId,
     pub(crate) type_name: &'static str,
@@ -70,63 +61,15 @@ impl ErasedEvent {
     }
 }
 
+impl<M: Message> From<Event<M>> for ErasedEvent {
+    fn from(value: Event<M>) -> Self {
+        unsafe { value.erase_message_type() }
+    }
+}
+
 impl<M: Message> From<M> for Event<M> {
     fn from(value: M) -> Self {
         Event::new(value)
-    }
-}
-
-pub struct ProducedEvent<'a> {
-    pub event: ErasedEvent,
-    pub source_connector: CowStr<'a>,
-    pub(crate) target: Option<ConnectorPath<'a>>,
-    pub(crate) scheduling: TimeTrigger,
-}
-
-impl<'a> ProducedEvent<'a> {
-    pub fn new(
-        event: impl EraseTyping<ErasedEvent>,
-        source_connector: CowStr<'a>,
-        target: Option<ConnectorPath<'a>>,
-        scheduling: TimeTrigger,
-    ) -> Self {
-        Self {
-            event: event.erase_typing(),
-            source_connector,
-            target,
-            scheduling,
-        }
-    }
-
-    pub fn new_instant(
-        event: impl EraseTyping<ErasedEvent>,
-        source_connector: impl ToCowStr<'a>,
-        target: Option<ConnectorPath<'a>>,
-    ) -> Self {
-        Self {
-            event: event.erase_typing(),
-            source_connector: source_connector.to_cow_str(),
-            target,
-            scheduling: TimeTrigger::Now,
-        }
-    }
-
-    pub fn scheduled_at(self, time: SimTimeValue) -> Self {
-        Self {
-            event: self.event,
-            source_connector: self.source_connector,
-            target: self.target,
-            scheduling: TimeTrigger::At(time),
-        }
-    }
-
-    pub fn scheduled_in(self, delay: SimDuration) -> Self {
-        Self {
-            event: self.event,
-            source_connector: self.source_connector,
-            target: self.target,
-            scheduling: TimeTrigger::In(delay),
-        }
     }
 }
 
@@ -136,9 +79,9 @@ pub struct RoutedEvent<'s> {
 }
 
 impl<'s> RoutedEvent<'s> {
-    pub fn new_external(event: impl EraseTyping<ErasedEvent>, target: ConnectorPath<'s>) -> Self {
+    pub fn new_external(event: impl Into<ErasedEvent>, target: ConnectorPath<'s>) -> Self {
         Self {
-            event: event.erase_typing(),
+            event: event.into(),
             route: Route {
                 from: EventSource::External,
                 to: target,
@@ -146,33 +89,10 @@ impl<'s> RoutedEvent<'s> {
         }
     }
 
-    pub fn new(event: impl EraseTyping<ErasedEvent>, route: Route<'s>) -> Self {
+    pub fn new(event: impl Into<ErasedEvent>, route: Route<'s>) -> Self {
         Self {
-            event: event.erase_typing(),
+            event: event.into(),
             route,
         }
-    }
-
-    pub fn from_produced(
-        source_model: CowStr<'s>,
-        event: ProducedEvent<'s>,
-        default_target: Option<ConnectorPath<'s>>,
-    ) -> Result<Self, RoutingError> {
-        let route = Route::new_internal(
-            ConnectorPath {
-                model: source_model.clone(),
-                connector: event.source_connector,
-            },
-            event
-                .target
-                .or(default_target)
-                .ok_or(RoutingError::MissingEventTarget {
-                    model: source_model.to_string(),
-                })?,
-        );
-        Ok(Self {
-            event: event.event,
-            route,
-        })
     }
 }
