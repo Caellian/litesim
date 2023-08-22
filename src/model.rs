@@ -124,7 +124,7 @@ impl<'s, M: Message> InputHandler<'s>
     type In = M;
 }
 
-pub trait ErasedInputHandler<'s> {
+pub trait ErasedInputHandler<'h, 's: 'h>: 'h {
     fn apply_event(
         &self,
         event: ErasedEvent,
@@ -133,7 +133,7 @@ pub trait ErasedInputHandler<'s> {
     fn type_id(&self) -> TypeId;
 }
 
-impl<'s, C: InputHandler<'s>> ErasedInputHandler<'s> for C {
+impl<'h, 's: 'h, C: InputHandler<'s> + 'h> ErasedInputHandler<'h, 's> for C {
     fn apply_event(
         &self,
         event: ErasedEvent,
@@ -163,7 +163,9 @@ pub trait Model<'s> {
     /// Lists all model output connectors
     fn output_connectors(&self) -> &'static [OutputConnectorInfo];
 
-    fn get_input_handler(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'s>>>;
+    fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
+    where
+        's: 'h;
 
     /// Called during initalization.
     ///
@@ -178,17 +180,22 @@ pub trait Model<'s> {
     fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError>;
 }
 
-pub(crate) trait ModelImpl<'s>: Model<'s> {
-    fn get_input_handler_by_name(
+pub trait ModelImpl<'s>: Model<'s> {
+    fn get_input_handler_by_name<'h>(
         &self,
         name: impl AsRef<str>,
-    ) -> Option<Box<dyn ErasedInputHandler<'s>>> {
-        self.input_connectors()
+    ) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
+    where
+        's: 'h,
+    {
+        let i = self
+            .input_connectors()
             .iter()
             .enumerate()
             .find(|(_, it)| **it == name.as_ref())
-            .map(|it| it.0)
-            .and_then(|i| self.get_input_handler(i))
+            .map(|it| it.0)?;
+
+        self.get_input_handler(i)
     }
 
     fn input_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {

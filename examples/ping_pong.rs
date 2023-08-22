@@ -4,8 +4,7 @@ pub struct PingPongEvent;
 
 pub struct Player;
 
-//FIXME: 's doesn't outlive 'static
-impl<'s: 'static> Model<'s> for Player {
+impl<'s> Model<'s> for Player {
     fn input_connectors(&self) -> &'static [&'static str] {
         static RESULT: &[&'static str] = &["receive"];
         RESULT
@@ -19,21 +18,23 @@ impl<'s: 'static> Model<'s> for Player {
         RESULT
     }
 
-    fn get_input_handler(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'s>>> {
-        let handler: &dyn Fn(
-            Event<PingPongEvent>,
-            SimulationCtx<'s>,
-        ) -> Result<(), SimulationError> = &|_: Event<PingPongEvent>, ctx: SimulationCtx<'s>| {
-            ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
-            Ok(())
+    fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>> where 's: 'h {
+        let handler = match index {
+            0 => {
+                let handler: &dyn Fn(
+                    Event<PingPongEvent>,
+                    SimulationCtx<'s>,
+                ) -> Result<(), SimulationError> =
+                    &|_: Event<PingPongEvent>, ctx: SimulationCtx<'s>| {
+                        ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
+                        Ok(())
+                    };
+                Box::new(handler)
+            }
+            _ => return None,
         };
 
-        let c: Box<dyn ErasedInputHandler<'s>> = Box::new(handler);
-
-        match index {
-            0 => Some(c),
-            _ => None,
-        }
+        Some(handler)
     }
 
     fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
