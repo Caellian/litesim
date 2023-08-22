@@ -11,7 +11,7 @@ use rand::Rng;
 use crate::{
     error::{RoutingError, SchedulerError, SimulationError},
     event::{Event, Message, ProducedEvent, RoutedEvent},
-    model::{ConnectorPath, EventSource, Route},
+    model::{ConnectorPath, EventSource, ModelImpl, Route},
     system::{AdjacentModels, BorrowedModel, SystemModel},
     time::{SimulationTime, TimeTrigger},
     util::{CowStr, SimulationRng},
@@ -46,7 +46,7 @@ impl<'s> Simulation<'s> {
                 &mut scheduler,
             );
 
-            model.erased_init(sim_ref);
+            model.init(sim_ref);
         }
 
         Ok(Simulation {
@@ -92,7 +92,7 @@ impl<'s> Simulation<'s> {
         let RoutedEvent { event, route } = event;
         let target_model = route.to.model.clone();
         let target_connector = route.to.connector.clone();
-        let mut model = BorrowedModel::new(&mut self.system, target_model.clone()).ok_or(
+        let model = BorrowedModel::new(&mut self.system, target_model.clone()).ok_or(
             SimulationError::ModelNotFound {
                 id: target_model.to_string(),
             },
@@ -100,8 +100,8 @@ impl<'s> Simulation<'s> {
 
         let state = SimulationCtx::new(self, target_model.clone());
 
-        let mut handler = model
-            .get_erased_input_handler(target_connector.as_ref())
+        let handler = model
+            .get_input_handler_by_name(target_connector.as_ref())
             .ok_or_else(|| RoutingError::UnknownModelConnector {
                 model: target_model.to_string(),
                 connector: target_connector.to_string(),
@@ -255,13 +255,15 @@ impl<'s> SimulationCtx<'s> {
         self.rng.borrow_mut().gen_range(range)
     }
 
-    pub fn schedule_change(&self, time: TimeTrigger) {
+    pub fn schedule_change(&self, time: TimeTrigger) -> Result<(), SimulationError> {
         unsafe {
-            (*self.scheduler).schedule_change(time.to_discrete(self.time), self.on_model.clone());
+            (*self.scheduler)
+                .schedule_change(time.to_discrete(self.time), self.on_model.clone())?;
         }
+        Ok(())
     }
 
-    pub fn on_connector<'c>(&'s self, connector: CowStr<'s>) -> ConnectorCtx<'c, 's>
+    pub fn on_connector<'c>(&'c self, connector: CowStr<'s>) -> ConnectorCtx<'c, 's>
     where
         's: 'c,
     {

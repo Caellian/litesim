@@ -8,12 +8,13 @@ use std::{
 
 use crate::{
     error::ValidationError,
-    model::{ConnectorPath, ErasedModel, Route},
+    model::{ConnectorPath, Model, Route},
+    prelude::ModelImpl,
     util::CowStr,
 };
 
 pub(crate) type IdStore<'s, Value> = HashMap<CowStr<'s>, Value>;
-pub(crate) type ModelStore<'s> = IdStore<'s, Box<dyn ErasedModel<'s>>>;
+pub(crate) type ModelStore<'s> = IdStore<'s, Box<dyn Model<'s>>>;
 
 pub struct SystemModel<'s> {
     pub models: ModelStore<'s>,
@@ -38,7 +39,7 @@ impl<'s> SystemModel<'s> {
         }
     }
 
-    pub fn push_model(&mut self, id: impl AsRef<str>, model: impl ErasedModel<'s> + 'static) {
+    pub fn push_model(&mut self, id: impl AsRef<str>, model: impl Model<'s> + 'static) {
         self.models
             .insert(CowStr::Owned(id.as_ref().to_string()), Box::new(model));
         *self.validated.borrow_mut() = false;
@@ -66,46 +67,42 @@ impl<'s> SystemModel<'s> {
         }
 
         for (a, b) in self.routes.iter() {
-            let output = if let Some(model_a) = self.models.get(a.model.as_ref()) {
-                match model_a.get_erased_output_handler(a.connector.as_ref()) {
-                    Some(it) => it.out_type_id(),
-                    None => {
-                        return Err(ValidationError::MissingConnector {
-                            model: a.model.to_string(),
-                            id: a.connector.to_string(),
-                        })
-                    }
-                }
-            } else {
-                return Err(ValidationError::MissingModel {
-                    id: a.model.to_string(),
-                });
-            };
+            let model_a =
+                self.models
+                    .get(a.model.as_ref())
+                    .ok_or_else(|| ValidationError::MissingModel {
+                        id: a.model.to_string(),
+                    })?;
 
-            if let Some(model_b) = self.models.get(b.model.as_ref()) {
-                match model_b.get_erased_output_handler(b.connector.as_ref()) {
-                    Some(it) => {
-                        if it.out_type_id() != output {
-                            return Err(ValidationError::ConnectionTypeMismatch {
-                                output_model: b.model.to_string(),
-                                output_connector: b.connector.to_string(),
-                                input_model: a.model.to_string(),
-                                input_connector: a.connector.to_string(),
-                            });
-                        }
-                    }
-                    None => {
-                        return Err(ValidationError::MissingConnector {
-                            model: b.model.to_string(),
-                            id: b.connector.to_string(),
-                        })
-                    }
+            let model_b =
+                self.models
+                    .get(b.model.as_ref())
+                    .ok_or_else(|| ValidationError::MissingModel {
+                        id: b.model.to_string(),
+                    })?;
+
+            let output_type = model_a
+                .output_type_id(a.connector.to_string())
+                .ok_or_else(|| ValidationError::MissingConnector {
+                    model: a.model.to_string(),
+                    id: a.connector.to_string(),
+                })?;
+
+            let input_type = model_b.input_type_id(b.connector.as_ref()).ok_or_else(|| {
+                ValidationError::MissingConnector {
+                    model: b.model.to_string(),
+                    id: b.connector.to_string(),
                 }
-            } else {
-                return Err(ValidationError::MissingModel {
-                    id: b.model.to_string(),
+            })?;
+
+            if input_type != output_type {
+                return Err(ValidationError::ConnectionTypeMismatch {
+                    output_model: a.model.to_string(),
+                    output_connector: a.connector.to_string(),
+                    input_model: b.model.to_string(),
+                    input_connector: b.connector.to_string(),
                 });
-            };
+            }
         }
 
         *self.validated.borrow_mut() = true;
@@ -153,7 +150,7 @@ impl<'s> Default for AdjacentModels<'s> {
 pub(crate) struct BorrowedModel<'s> {
     owner: *mut Pin<Box<SystemModel<'s>>>,
     id: CowStr<'s>,
-    model: MaybeUninit<Box<dyn ErasedModel<'s>>>,
+    model: MaybeUninit<Box<dyn Model<'s>>>,
 }
 
 impl<'s> BorrowedModel<'s> {
@@ -177,7 +174,7 @@ impl<'s> Drop for BorrowedModel<'s> {
 }
 
 impl<'s> Deref for BorrowedModel<'s> {
-    type Target = dyn ErasedModel<'s>;
+    type Target = dyn Model<'s>;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.model.assume_init_ref().as_ref() }

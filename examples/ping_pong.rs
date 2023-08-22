@@ -1,4 +1,5 @@
-use std::rc::Rc;
+#![feature(const_type_id)]
+use std::any::TypeId;
 
 use litesim::prelude::*;
 
@@ -6,21 +7,37 @@ pub struct PingPongEvent;
 
 pub struct Player;
 
-fn recieve_handler(_: PingPongEvent, ctx: SimulationCtx) -> Result<(), SimulationError> {
+fn extern_handler<'s>(
+    _: Event<PingPongEvent>,
+    ctx: SimulationCtx<'s>,
+) -> Result<(), SimulationError> {
     ctx.schedule_change(In(ctx.rand_range(0.0..1.0)));
     Ok(())
 }
 
 impl<'s> Model<'s> for Player {
-    type I = ((&'static str, Rc<dyn ErasedInputHandler<'s>>),);
-    type O = ();
-
-    fn input_connectors(&self) -> Self::I {
-        (("receive", Rc::new(recieve_handler)),)
+    fn input_connectors(&self) -> &'static [ConnectorInfo] {
+        static RESULT: &[ConnectorInfo] =
+            &[ConnectorInfo("receive", TypeId::of::<PingPongEvent>())];
+        RESULT
     }
 
-    fn output_connectors(&self) -> Self::O {
-        ()
+    fn output_connectors(&self) -> &'static [ConnectorInfo] {
+        static RESULT: &[ConnectorInfo] = &[ConnectorInfo("send", TypeId::of::<PingPongEvent>())];
+        RESULT
+    }
+
+    fn get_input_handler(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'s>>> {
+        let handler: &dyn Fn(
+            Event<PingPongEvent>,
+            SimulationCtx<'s>,
+        ) -> Result<(), SimulationError> = &extern_handler;
+        let c: Box<dyn ErasedInputHandler<'s>> = Box::new(handler);
+
+        match index {
+            0 => Some(c),
+            _ => None,
+        }
     }
 
     fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
