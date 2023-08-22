@@ -1,5 +1,5 @@
 #![allow(incomplete_features)]
-#![feature(specialization, auto_traits, negative_impls)]
+#![feature(specialization, auto_traits, negative_impls, const_type_id)]
 
 pub mod error;
 pub mod event;
@@ -18,6 +18,7 @@ pub mod prelude {
     pub use crate::system::*;
     pub use crate::time::TimeTrigger::*;
     pub use crate::time::*;
+    pub use crate::util::const_type_id;
 
     pub use crate::connection;
     pub use crate::push_event;

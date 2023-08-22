@@ -111,6 +111,12 @@ pub trait EraseTyping<Erased> {
     fn erase_typing(self) -> Erased;
 }
 
+/// Re-exported const TypeId constructor so dependants don't need to enable const_type_id
+/// flag.
+pub const fn const_type_id<T: 'static>() -> std::any::TypeId {
+    std::any::TypeId::of::<T>()
+}
+
 /*
 MAPT<Vararg, (ABC) => ((X, A), (X, B))>
 

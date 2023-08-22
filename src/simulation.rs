@@ -158,6 +158,7 @@ impl<'s> Simulation<'s> {
                                 id: model_id.to_string(),
                             })?;
 
+                        model.handle_update(state)?;
                         /* TODO: Handle after internal
                         let produced: Option<ProducedEvent<'_, E>> =
                             match model.handle_update(state) {

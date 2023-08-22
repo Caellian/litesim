@@ -1,29 +1,20 @@
-#![feature(const_type_id)]
-use std::any::TypeId;
-
 use litesim::prelude::*;
 
 pub struct PingPongEvent;
 
 pub struct Player;
 
-fn extern_handler<'s>(
-    _: Event<PingPongEvent>,
-    ctx: SimulationCtx<'s>,
-) -> Result<(), SimulationError> {
-    ctx.schedule_change(In(ctx.rand_range(0.0..1.0)));
-    Ok(())
-}
-
-impl<'s> Model<'s> for Player {
+//FIXME: 's doesn't outlive 'static
+impl<'s: 'static> Model<'s> for Player {
     fn input_connectors(&self) -> &'static [ConnectorInfo] {
         static RESULT: &[ConnectorInfo] =
-            &[ConnectorInfo("receive", TypeId::of::<PingPongEvent>())];
+            &[ConnectorInfo("receive", const_type_id::<PingPongEvent>())];
         RESULT
     }
 
     fn output_connectors(&self) -> &'static [ConnectorInfo] {
-        static RESULT: &[ConnectorInfo] = &[ConnectorInfo("send", TypeId::of::<PingPongEvent>())];
+        static RESULT: &[ConnectorInfo] =
+            &[ConnectorInfo("send", const_type_id::<PingPongEvent>())];
         RESULT
     }
 
@@ -31,7 +22,11 @@ impl<'s> Model<'s> for Player {
         let handler: &dyn Fn(
             Event<PingPongEvent>,
             SimulationCtx<'s>,
-        ) -> Result<(), SimulationError> = &extern_handler;
+        ) -> Result<(), SimulationError> = &|_: Event<PingPongEvent>, ctx: SimulationCtx<'s>| {
+            ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
+            Ok(())
+        };
+
         let c: Box<dyn ErasedInputHandler<'s>> = Box::new(handler);
 
         match index {
@@ -42,6 +37,7 @@ impl<'s> Model<'s> for Player {
 
     fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
         // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
+        log::info!("Sending");
         push_event!(ctx, "send", PingPongEvent)
     }
 }
@@ -64,7 +60,7 @@ fn main() {
     sim.scheduler_mut()
         .schedule_event(
             0.5,
-            RoutedEvent::new_external(Event::new(PingPongEvent), connection!(p1::recieve)),
+            RoutedEvent::new_external(Event::new(PingPongEvent), connection!(p1::receive)),
         )
         .expect("unable to schedule initial event");
 
