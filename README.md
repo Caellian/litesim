@@ -14,9 +14,10 @@ LiteSim supports multiple different time values which can be controlled through 
 - **f64** - flag: `time_f64`
 - [**chrono**](https://github.com/chronotope/chrono) - flag: `time_chrono`
 
-### Planned features
+### Wanted features
 - **Serde** support for systems as well as simulations in progress.
 - **Backtracking** support for systems with models that support it.
+- **Multithreading** support
 
 ## Alternatives
 - [sim](https://github.com/ndebuhr/sim) - initial inspiration for this library

@@ -1,6 +1,6 @@
 pub type CowStr<'s> = std::borrow::Cow<'s, str>;
 
-pub trait ToCowStr<'s> {
+pub trait ToCowStr<'s>: AsRef<str> {
     fn to_cow_str(self) -> CowStr<'s>;
 }
 

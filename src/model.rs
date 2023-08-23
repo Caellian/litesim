@@ -3,8 +3,8 @@ use std::{any::TypeId, fmt::Debug};
 use crate::{
     error::{RoutingError, SimulationError},
     event::{Event, Message},
-    prelude::ErasedEvent,
-    simulation::SimulationCtx,
+    prelude::{ConnectorCtx, ErasedEvent},
+    simulation::ModelCtx,
     util::CowStr,
 };
 
@@ -114,43 +114,59 @@ impl<'s> From<(&ConnectorPath<'s>, &ConnectorPath<'s>)> for Route<'s> {
 }
 
 pub trait InputHandler<'s>:
-    Fn(Event<Self::In>, SimulationCtx<'s>) -> Result<(), SimulationError>
+    Fn(&mut Self::Model, Event<Self::In>, ModelCtx<'s>) -> Result<(), SimulationError>
 {
+    type Model: Model<'s> + 'static;
     type In: Message;
 }
-impl<'s, M: Message> InputHandler<'s>
-    for &dyn Fn(Event<M>, SimulationCtx<'s>) -> Result<(), SimulationError>
+impl<'s, S: Model<'s> + 'static, M: Message> InputHandler<'s>
+    for &dyn Fn(&mut S, Event<M>, ModelCtx<'s>) -> Result<(), SimulationError>
 {
+    type Model = S;
     type In = M;
 }
 
 pub trait ErasedInputHandler<'h, 's: 'h>: 'h {
-    fn apply_event(
-        &self,
-        event: ErasedEvent,
-        ctx: SimulationCtx<'s>,
-    ) -> Result<(), SimulationError>;
-    fn type_id(&self) -> TypeId;
+    fn apply_event(&self, event: ErasedEvent, ctx: ConnectorCtx<'s>)
+        -> Result<(), SimulationError>;
+    fn model_type_id(&self) -> TypeId;
+    fn event_type_id(&self) -> TypeId;
 }
 
 impl<'h, 's: 'h, C: InputHandler<'s> + 'h> ErasedInputHandler<'h, 's> for C {
     fn apply_event(
         &self,
         event: ErasedEvent,
-        ctx: SimulationCtx<'s>,
+        ctx: ConnectorCtx<'s>,
     ) -> Result<(), SimulationError> {
         let casted = event
             .try_restore_type()
             .map_err(|got| RoutingError::InvalidEventType {
-                connector: std::any::type_name::<Self>(),
                 event_type: got.type_name,
                 expected: std::any::type_name::<C::In>(),
             })?;
-        self(casted, ctx)?;
+
+        let ConnectorCtx {
+            model_ctx,
+            mut on_model,
+        } = ctx;
+
+        let model = unsafe {
+            on_model
+                .cast_mut::<C::Model>()
+                .ok_or_else(|| RoutingError::InvalidModelType {
+                    expected: std::any::type_name::<C::Model>(),
+                })?
+        };
+        self(model, casted, model_ctx)?;
         Ok(())
     }
 
-    fn type_id(&self) -> TypeId {
+    fn model_type_id(&self) -> TypeId {
+        TypeId::of::<C::Model>()
+    }
+
+    fn event_type_id(&self) -> TypeId {
         TypeId::of::<C::In>()
     }
 }
@@ -171,13 +187,15 @@ pub trait Model<'s> {
     ///
     /// This method allows models like generators to schedule inital changes.
     #[allow(unused_variables)]
-    fn init(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+    fn init(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         Ok(())
     }
 
     /// Handler for internal model changes when the elapsed time is supposed to affect
     /// the state of the model.'
-    fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError>;
+    fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError>;
+
+    fn type_id(&self) -> TypeId;
 }
 
 pub trait ModelImpl<'s>: Model<'s> {
@@ -200,7 +218,7 @@ pub trait ModelImpl<'s>: Model<'s> {
 
     fn input_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
         let handler = self.get_input_handler_by_name(name)?;
-        Some(handler.type_id())
+        Some(handler.event_type_id())
     }
 
     fn output_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
@@ -216,29 +234,36 @@ impl<'s, M: Model<'s> + ?Sized> ModelImpl<'s> for M {}
 #[macro_export]
 macro_rules! push_event {
     ($ctx: ident, $id: literal, $msg: expr) => {{
-        let connector_ctx = $ctx.on_connector(std::borrow::Cow::Borrowed($id));
-        connector_ctx.push_event(::litesim::event::Event::new($msg), None)?;
+        $ctx.push_event_with_source(
+            ::litesim::event::Event::new($msg),
+            None,
+            std::borrow::Cow::Borrowed($id),
+        )?;
         Ok(())
     }};
     ($ctx: ident, $id: literal, $msg: expr, $time: expr) => {{
-        let connector_ctx = ctx.on_connector(std::borrow::Cow::Borrowed($id));
-        connector_ctx.push_event_with_time(::litesim::event::Event::new($msg), $time, None)?;
+        $ctx.push_event_with_time_and_source(
+            ::litesim::event::Event::new($msg),
+            $time,
+            None,
+            std::borrow::Cow::Borrowed($id),
+        )?;
         Ok(())
     }};
     ($ctx: ident, $id: literal, $msg: expr, Now, $target: literal) => {{
-        let connector_ctx = ctx.on_connector(std::borrow::Cow::Borrowed($id));
-        connector_ctx.push_event(
+        $ctx.push_event_with_source(
             ::litesim::event::Event::new($msg),
             Some(std::borrow::Cow::Borrowed($target)),
+            std::borrow::Cow::Borrowed($id),
         )?;
         Ok(())
     }};
     ($ctx: ident, $id: literal, $msg: expr, $time: expr, $target: literal) => {{
-        let connector_ctx = ctx.on_connector(std::borrow::Cow::Borrowed($id));
-        connector_ctx.push_event_with_time(
+        $ctx.push_event_with_time_and_source(
             ::litesim::event::Event::new($msg),
             $time,
             Some(std::borrow::Cow::Borrowed($target)),
+            std::borrow::Cow::Borrowed($id),
         )?;
         Ok(())
     }};

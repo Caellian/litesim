@@ -4,6 +4,26 @@ pub struct PingPongEvent;
 
 pub struct Player;
 
+/*
+#[litesim]
+impl<'s> Model<'s> for Player {
+    #[input]
+    fn receive(&mut self, _: Event<PingPongEvent>, ctx: SimulationCtx<'s>) {
+        ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
+        Ok(())
+    },
+
+    #[output]
+    fn send(&self, data: PingPongEvent);
+
+    fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+        // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
+        log::info!("Sending");
+        push_event!(ctx, "send", PingPongEvent)
+    }
+}
+*/
+
 impl<'s> Model<'s> for Player {
     fn input_connectors(&self) -> &'static [&'static str] {
         static RESULT: &[&'static str] = &["receive"];
@@ -18,14 +38,18 @@ impl<'s> Model<'s> for Player {
         RESULT
     }
 
-    fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>> where 's: 'h {
+    fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
+    where
+        's: 'h,
+    {
         let handler = match index {
             0 => {
                 let handler: &dyn Fn(
+                    &mut Player,
                     Event<PingPongEvent>,
-                    SimulationCtx<'s>,
+                    ModelCtx<'s>,
                 ) -> Result<(), SimulationError> =
-                    &|_: Event<PingPongEvent>, ctx: SimulationCtx<'s>| {
+                    &|_: &mut Player, _: Event<PingPongEvent>, ctx: ModelCtx<'s>| {
                         ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
                         Ok(())
                     };
@@ -37,10 +61,14 @@ impl<'s> Model<'s> for Player {
         Some(handler)
     }
 
-    fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+    fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
         log::info!("Sending");
         push_event!(ctx, "send", PingPongEvent)
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        const_type_id::<Player>()
     }
 }
 

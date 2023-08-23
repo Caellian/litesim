@@ -15,7 +15,7 @@ rand = "0.8"
 float-ord = { version = "0.3", optional = true }
 chrono = { version = "0.4", optional = true, features = ["serde"] }
 
-paste = "1.0"
+#litesim_impl = { path = "./litesim_impl" }
 
 thiserror = "1.0"
 
