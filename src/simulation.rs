@@ -96,6 +96,34 @@ impl<'s> Simulation<'s> {
         Ok(())
     }
 
+    pub fn step(&mut self) -> Result<(), SimulationError> {
+        let scheduled = match self.scheduler.next() {
+            Some(it) => it,
+            None => return Ok(()),
+        };
+
+        for entry in scheduled {
+            match entry {
+                Scheduled::Internal(model_id) => {
+                    let mut model = self.system.models.borrow(model_id.clone())?.ok_or(
+                        SimulationError::ModelNotFound {
+                            id: model_id.to_string(),
+                        },
+                    )?;
+
+                    let state = ModelCtx::new(self, model_id);
+
+                    model.handle_update(state)?;
+                }
+                Scheduled::Event(event) => {
+                    self.route_event(event)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Runs simulation until passed time is reached (inclusive) or the simulated system becomes inert
     pub fn run_until(&mut self, time: impl Into<SimulationTime>) -> Result<(), SimulationError> {
         let max_time = time.into();
@@ -104,26 +132,8 @@ impl<'s> Simulation<'s> {
             if expected_time >= max_time {
                 break;
             }
-            let scheduled = self.scheduler.next().unwrap();
 
-            for entry in scheduled {
-                match entry {
-                    Scheduled::Internal(model_id) => {
-                        let mut model = self.system.models.borrow(model_id.clone())?.ok_or(
-                            SimulationError::ModelNotFound {
-                                id: model_id.to_string(),
-                            },
-                        )?;
-
-                        let state = ModelCtx::new(self, model_id);
-
-                        model.handle_update(state)?;
-                    }
-                    Scheduled::Event(event) => {
-                        self.route_event(event)?;
-                    }
-                }
-            }
+            self.step()?;
         }
 
         Ok(())
