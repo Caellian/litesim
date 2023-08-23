@@ -1,7 +1,4 @@
-use std::{
-    any::{Any, TypeId},
-    pin::Pin,
-};
+use std::any::{Any, TypeId};
 
 use crate::{
     model::{ConnectorPath, Route},
@@ -13,14 +10,14 @@ impl<T> Message for T where T: Any {}
 
 pub struct Event<M: Message> {
     type_info: TypeId,
-    pub data: Pin<Box<M>>,
+    pub data: Box<M>,
 }
 
 impl<M: Message> Event<M> {
     pub fn new(data: M) -> Self {
         Event {
             type_info: TypeId::of::<M>(),
-            data: Box::pin(data),
+            data: Box::new(data),
         }
     }
 
@@ -28,26 +25,36 @@ impl<M: Message> Event<M> {
     /// Message type has been restored to original value. Doing so will cause a
     /// memory leak.
     pub(crate) unsafe fn erase_message_type(self) -> ErasedEvent {
-        let data: *const Pin<Box<M>> = &self.data;
+        let data: *const Box<M> = &self.data;
 
         ErasedEvent {
             type_id: self.type_info,
             type_name: std::any::type_name::<M>(),
-            data: data as *const Pin<Box<ErasedMessage>>,
+            data: data as *const Box<ErasedMessage>,
         }
     }
+
+    pub fn inner(&self) -> &M {
+        &*self.data
+    }
+
+    pub fn into_inner(self) -> M {
+        *self.data
+    }
 }
+
+pub type Signal = Event<()>;
 
 struct ErasedMessage;
 pub struct ErasedEvent {
     pub(crate) type_id: TypeId,
     pub(crate) type_name: &'static str,
-    data: *const Pin<Box<ErasedMessage>>,
+    data: *const Box<ErasedMessage>,
 }
 
 impl ErasedEvent {
     pub fn try_restore_type<M: Message>(self) -> Result<Event<M>, ErasedEvent> {
-        let data: *const Pin<Box<M>> = self.data as *const Pin<Box<M>>;
+        let data = self.data as *const Box<M>;
         unsafe {
             if self.type_id == TypeId::of::<M>() {
                 Ok(Event {

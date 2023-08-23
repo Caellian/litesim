@@ -171,29 +171,47 @@ impl<'h, 's: 'h, C: InputHandler<'s> + 'h> ErasedInputHandler<'h, 's> for C {
     }
 }
 
-pub struct OutputConnectorInfo(pub &'static str, pub TypeId);
+pub struct OutputConnectorInfo(&'static str, TypeId);
+
+impl OutputConnectorInfo {
+    pub const fn new<T: 'static>(id: &'static str) -> Self {
+        OutputConnectorInfo(id, TypeId::of::<T>())
+    }
+}
 
 pub trait Model<'s> {
     /// Lists all model input connectors
-    fn input_connectors(&self) -> &'static [&'static str];
+    ///
+    /// Returned value must stay the same for each model instance for the
+    /// duration of the simulation.
+    fn input_connectors(&self) -> Vec<&'static str>;
     /// Lists all model output connectors
-    fn output_connectors(&self) -> &'static [OutputConnectorInfo];
+    ///
+    /// Returned value must stay the same for each model instance for the
+    /// duration of the simulation.
+    fn output_connectors(&self) -> Vec<OutputConnectorInfo>;
 
+    /// Returns input handlers for all input connectors.
+    /// 
+    /// Index argument matches indices of [Self::input_connectors].
     fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
     where
         's: 'h;
 
     /// Called during initalization.
     ///
-    /// This method allows models like generators to schedule inital changes.
+    /// This method allows models like generators to schedule their inital changes.
     #[allow(unused_variables)]
     fn init(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         Ok(())
     }
 
     /// Handler for internal model changes when the elapsed time is supposed to affect
-    /// the state of the model.'
-    fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError>;
+    /// the state of the model.
+    #[allow(unused_variables)]
+    fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+        Ok(())
+    }
 
     fn type_id(&self) -> TypeId;
 }

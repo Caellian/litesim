@@ -25,40 +25,36 @@ impl<'s> Model<'s> for Player {
 */
 
 impl<'s> Model<'s> for Player {
-    fn input_connectors(&self) -> &'static [&'static str] {
-        static RESULT: &[&'static str] = &["receive"];
-        RESULT
+    fn input_connectors(&self) -> Vec<&'static str> {
+        vec!["receive"]
     }
 
-    fn output_connectors(&self) -> &'static [OutputConnectorInfo] {
-        static RESULT: &[OutputConnectorInfo] = &[OutputConnectorInfo(
-            "send",
-            const_type_id::<PingPongEvent>(),
-        )];
-        RESULT
+    fn output_connectors(&self) -> Vec<OutputConnectorInfo> {
+        vec![OutputConnectorInfo::new::<PingPongEvent>("send")]
     }
 
     fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
     where
         's: 'h,
     {
-        let handler = match index {
+        match index {
             0 => {
-                let handler: &dyn Fn(
-                    &mut Player,
-                    Event<PingPongEvent>,
-                    ModelCtx<'s>,
-                ) -> Result<(), SimulationError> =
+                let handler: Box<
+                    &dyn Fn(
+                        &mut Player,
+                        Event<PingPongEvent>,
+                        ModelCtx<'s>,
+                    ) -> Result<(), SimulationError>,
+                > = Box::new(
                     &|_: &mut Player, _: Event<PingPongEvent>, ctx: ModelCtx<'s>| {
                         ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
                         Ok(())
-                    };
-                Box::new(handler)
+                    },
+                );
+                return Some(handler);
             }
             _ => return None,
-        };
-
-        Some(handler)
+        }
     }
 
     fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {

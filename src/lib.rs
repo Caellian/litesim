@@ -1,5 +1,5 @@
 #![allow(incomplete_features)]
-#![feature(specialization, auto_traits, negative_impls, const_type_id)]
+#![feature(const_type_id, box_into_inner)]
 
 pub mod error;
 pub mod event;
