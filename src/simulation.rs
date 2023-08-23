@@ -127,6 +127,50 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
         Ok(())
     }
 
+    pub fn step(&mut self) -> Result<(), SimulationError> {
+        let scheduled = match self.scheduler.next() {
+            Some(it) => it,
+            None => return Ok(()),
+        };
+
+        for entry in scheduled {
+            match entry {
+                Scheduled::Internal(model_id) => {
+                    let state = SimulationCtx::new(&self, model_id.clone());
+                    let default_target = if state.routes.outputs.len() == 1 {
+                        state.routes.outputs.first().cloned()
+                    } else {
+                        None
+                    };
+                    let mut model = BorrowedModel::new(&mut self.system, model_id.clone()).ok_or(
+                        SimulationError::ModelNotFound {
+                            id: model_id.to_string(),
+                        },
+                    )?;
+
+                    let produced: Option<ProducedEvent<'_, E>> = match model.handle_change(state) {
+                        ChangeEffect::None => None,
+                        ChangeEffect::ScheduleInternal(new_time) => {
+                            self.scheduler
+                                .schedule_internal(new_time, model_id.clone())?;
+                            None
+                        }
+                        ChangeEffect::Produce(produced) => Some(produced),
+                    };
+
+                    if let Some(event) = produced {
+                        self.handle_produced_event(model_id, event, default_target)?;
+                    }
+                }
+                Scheduled::Event(event) => {
+                    self.route_event(event)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Runs simulation until passed time is reached (inclusive) or the simulated system becomes inert
     pub fn run_until(&mut self, time: impl Into<SimulationTime>) -> Result<(), SimulationError> {
         let max_time = time.into();
@@ -135,42 +179,8 @@ impl<'s, E: Event + 's> Simulation<'s, E> {
             if expected_time >= max_time {
                 break;
             }
-            let scheduled = self.scheduler.next().unwrap();
 
-            for entry in scheduled {
-                match entry {
-                    Scheduled::Internal(model_id) => {
-                        let state = SimulationCtx::new(&self, model_id.clone());
-                        let default_target = if state.routes.outputs.len() == 1 {
-                            state.routes.outputs.first().cloned()
-                        } else {
-                            None
-                        };
-                        let mut model = BorrowedModel::new(&mut self.system, model_id.clone())
-                            .ok_or(SimulationError::ModelNotFound {
-                                id: model_id.to_string(),
-                            })?;
-
-                        let produced: Option<ProducedEvent<'_, E>> =
-                            match model.handle_change(state) {
-                                ChangeEffect::None => None,
-                                ChangeEffect::ScheduleInternal(new_time) => {
-                                    self.scheduler
-                                        .schedule_internal(new_time, model_id.clone())?;
-                                    None
-                                }
-                                ChangeEffect::Produce(produced) => Some(produced),
-                            };
-
-                        if let Some(event) = produced {
-                            self.handle_produced_event(model_id, event, default_target)?;
-                        }
-                    }
-                    Scheduled::Event(event) => {
-                        self.route_event(event)?;
-                    }
-                }
-            }
+            self.step()?;
         }
 
         Ok(())
