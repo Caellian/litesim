@@ -15,6 +15,7 @@ pub type SimDuration = f64;
 pub type SimDuration = chrono::Duration;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
 pub struct SimulationTime {
     pub(crate) value: SimTimeValue,
@@ -107,5 +108,11 @@ impl TimeTrigger {
             TimeTrigger::At(time) => SimulationTime::new(time.clone()),
             TimeTrigger::In(delay) => current + delay.clone(),
         }
+    }
+}
+
+impl From<SimulationTime> for TimeTrigger {
+    fn from(time: SimulationTime) -> Self {
+        TimeTrigger::At(time.value)
     }
 }

@@ -1,4 +1,4 @@
-use proc_macro2::{Ident, Span,};
+use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::*;
 

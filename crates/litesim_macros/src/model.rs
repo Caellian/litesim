@@ -455,7 +455,7 @@ impl ModelTraitImpl {
                 let ty = &output.ty;
                 let name = &output.name;
                 quote! {
-                    ::litesim::model::OutputConnectorInfo::new::<#ty>(#name)
+                    ::litesim::routes::OutputConnectorInfo::new::<#ty>(#name)
                 }
             })
             .collect();

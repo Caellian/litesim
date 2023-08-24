@@ -22,8 +22,8 @@ impl<'s> ToCowStr<'s> for String {
     }
 }
 
-pub trait SimulationRng: rand_core::RngCore {}
-impl<T: rand_core::RngCore> SimulationRng for T {}
+pub trait SimulationRng: rand_core::RngCore + 'static {}
+impl<T: rand_core::RngCore + 'static> SimulationRng for T {}
 
 /// Re-exported const TypeId constructor so dependants don't need to enable const_type_id
 /// flag.

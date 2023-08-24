@@ -10,8 +10,9 @@ use rand::Rng;
 use crate::{
     error::{RoutingError, SchedulerError, SimulationError},
     event::{Event, Message, RoutedEvent},
-    model::{ConnectorPath, EventSource, ModelImpl, Route},
+    model::ModelImpl,
     prelude::BorrowedModel,
+    routes::{ConnectorPath, EventSource, Route},
     system::{AdjacentModels, SystemModel},
     time::{SimulationTime, TimeTrigger},
     util::{CowStr, SimulationRng, ToCowStr},

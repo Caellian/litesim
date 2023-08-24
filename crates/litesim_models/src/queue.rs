@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 
 use litesim::prelude::*;
 
+#[derive(Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Queue<T: Message> {
     queue: VecDeque<T>,
 }
@@ -17,7 +19,7 @@ impl<'s, T: Message> Model<'s> for Queue<T> {
     #[input(signal)]
     fn pop(&mut self, _: ModelCtx<'s>) -> Result<(), SimulationError> {
         if let Some(popped) = self.queue.pop_back() {
-            self.output(popped);
+            self.output(popped)?;
         }
         Ok(())
     }

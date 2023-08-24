@@ -5,17 +5,18 @@ use std::{
 };
 
 use crate::{
+    error::ModelStoreError,
     error::ValidationError,
-    model::{ConnectorPath, Model, Route},
-    prelude::{ModelImpl, ModelStoreError},
+    model::{Model, ModelImpl},
+    routes::{ConnectorPath, Route},
     util::{CowStr, ToCowStr},
 };
 
 pub(crate) type IdStore<'s, Value> = HashMap<CowStr<'s>, Value>;
 pub struct SystemModel<'s> {
-    pub models: ModelStore<'s>,
-    pub routes: HashMap<ConnectorPath<'s>, ConnectorPath<'s>>,
-    pub validated: bool,
+    pub(crate) models: ModelStore<'s>,
+    pub(crate) routes: HashMap<ConnectorPath<'s>, ConnectorPath<'s>>,
+    pub(crate) validated: bool,
     pub(crate) route_cache: IdStore<'s, AdjacentModels<'s>>,
 }
 
@@ -192,10 +193,11 @@ impl<'s> ModelSlot<'s> {
     }
 }
 
-pub struct ModelStore<'s> {
+pub(crate) struct ModelStore<'s> {
     data: HashMap<CowStr<'s>, ModelSlot<'s>>,
 }
 
+#[allow(unused)]
 impl<'s> ModelStore<'s> {
     pub fn new() -> Self {
         Self {
@@ -263,7 +265,7 @@ impl<'s> ModelStore<'s> {
     }
 }
 
-pub struct ModelStoreIter<'i, 's: 'i> {
+pub(crate) struct ModelStoreIter<'i, 's: 'i> {
     store: &'i mut ModelStore<'s>,
     pos: usize,
 }
@@ -286,12 +288,13 @@ impl<'i, 's: 'i> Iterator for ModelStoreIter<'i, 's> {
     }
 }
 
-pub struct BorrowedModel<'s> {
+pub(crate) struct BorrowedModel<'s> {
     owner: *mut ModelSlot<'s>,
     id: CowStr<'s>,
     model: *mut dyn Model<'s>,
 }
 
+#[allow(unused)]
 impl<'s> BorrowedModel<'s> {
     pub fn new(owner: *mut ModelSlot<'s>, id: impl ToCowStr<'s>) -> Result<Self, ModelStoreError> {
         let model = unsafe { (*owner).take()? };

@@ -1,9 +1,6 @@
 use std::any::{Any, TypeId};
 
-use crate::{
-    model::{ConnectorPath, Route},
-    prelude::EventSource,
-};
+use crate::routes::{ConnectorPath, EventSource, Route};
 
 pub trait Message: Any + 'static {}
 impl<T> Message for T where T: Any {}
@@ -81,8 +78,8 @@ impl<M: Message> From<M> for Event<M> {
 }
 
 pub struct RoutedEvent<'s> {
-    pub event: ErasedEvent,
-    pub route: Route<'s>,
+    pub(crate) event: ErasedEvent,
+    pub(crate) route: Route<'s>,
 }
 
 impl<'s> RoutedEvent<'s> {
