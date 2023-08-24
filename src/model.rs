@@ -192,7 +192,7 @@ pub trait Model<'s> {
     fn output_connectors(&self) -> Vec<OutputConnectorInfo>;
 
     /// Returns input handlers for all input connectors.
-    /// 
+    ///
     /// Index argument matches indices of [Self::input_connectors].
     fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
     where
@@ -251,38 +251,34 @@ impl<'s, M: Model<'s> + ?Sized> ModelImpl<'s> for M {}
 
 #[macro_export]
 macro_rules! push_event {
-    ($ctx: ident, $id: literal, $msg: expr) => {{
+    ($ctx: ident, $id: literal, $msg: expr) => {
         $ctx.push_event_with_source(
             ::litesim::event::Event::new($msg),
             None,
             std::borrow::Cow::Borrowed($id),
-        )?;
-        Ok(())
-    }};
-    ($ctx: ident, $id: literal, $msg: expr, $time: expr) => {{
+        )
+    };
+    ($ctx: ident, $id: literal, $msg: expr, $time: expr) => {
         $ctx.push_event_with_time_and_source(
             ::litesim::event::Event::new($msg),
             $time,
             None,
             std::borrow::Cow::Borrowed($id),
-        )?;
-        Ok(())
-    }};
-    ($ctx: ident, $id: literal, $msg: expr, Now, $target: literal) => {{
+        )
+    };
+    ($ctx: ident, $id: literal, $msg: expr, Now, $target: literal) => {
         $ctx.push_event_with_source(
             ::litesim::event::Event::new($msg),
             Some(std::borrow::Cow::Borrowed($target)),
             std::borrow::Cow::Borrowed($id),
-        )?;
-        Ok(())
-    }};
-    ($ctx: ident, $id: literal, $msg: expr, $time: expr, $target: literal) => {{
+        )
+    };
+    ($ctx: ident, $id: literal, $msg: expr, $time: expr, $target: literal) => {
         $ctx.push_event_with_time_and_source(
             ::litesim::event::Event::new($msg),
             $time,
             Some(std::borrow::Cow::Borrowed($target)),
             std::borrow::Cow::Borrowed($id),
-        )?;
-        Ok(())
-    }};
+        )
+    };
 }

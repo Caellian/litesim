@@ -5,7 +5,7 @@ use crate::{
     prelude::EventSource,
 };
 
-pub trait Message: Any {}
+pub trait Message: Any + 'static {}
 impl<T> Message for T where T: Any {}
 
 pub struct Event<M: Message> {

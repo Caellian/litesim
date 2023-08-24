@@ -1,7 +1,5 @@
 use litesim::prelude::*;
 
-pub struct PingPongEvent;
-
 pub struct Player;
 
 /*
@@ -19,52 +17,27 @@ impl<'s> Model<'s> for Player {
     fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
         // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
         log::info!("Sending");
-        push_event!(ctx, "send", PingPongEvent)
+        self.send(PingPongEvent)
     }
 }
 */
 
+#[litesim_model]
 impl<'s> Model<'s> for Player {
-    fn input_connectors(&self) -> Vec<&'static str> {
-        vec!["receive"]
+    #[input(signal)]
+    fn receive(&self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+        ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
+        Ok(())
     }
 
-    fn output_connectors(&self) -> Vec<OutputConnectorInfo> {
-        vec![OutputConnectorInfo::new::<PingPongEvent>("send")]
-    }
+    #[output(signal)]
+    fn send(&self);
 
-    fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
-    where
-        's: 'h,
-    {
-        match index {
-            0 => {
-                let handler: Box<
-                    &dyn Fn(
-                        &mut Player,
-                        Event<PingPongEvent>,
-                        ModelCtx<'s>,
-                    ) -> Result<(), SimulationError>,
-                > = Box::new(
-                    &|_: &mut Player, _: Event<PingPongEvent>, ctx: ModelCtx<'s>| {
-                        ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
-                        Ok(())
-                    },
-                );
-                return Some(handler);
-            }
-            _ => return None,
-        }
-    }
-
-    fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+    fn handle_update(&mut self, _: ModelCtx<'s>) -> Result<(), SimulationError> {
         // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
         log::info!("Sending");
-        push_event!(ctx, "send", PingPongEvent)
-    }
-
-    fn type_id(&self) -> std::any::TypeId {
-        const_type_id::<Player>()
+        self.send()?;
+        Ok(())
     }
 }
 
@@ -86,7 +59,7 @@ fn main() {
     sim.scheduler_mut()
         .schedule_event(
             0.5,
-            RoutedEvent::new_external(Event::new(PingPongEvent), connection!(p1::receive)),
+            RoutedEvent::new_external(Signal::new(()), connection!(p1::receive)),
         )
         .expect("unable to schedule initial event");
 

@@ -23,4 +23,6 @@ pub mod prelude {
     pub use crate::connection;
     pub use crate::push_event;
     pub use crate::route;
+
+    pub use litesim_macros::litesim_model;
 }
