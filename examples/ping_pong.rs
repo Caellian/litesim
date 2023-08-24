@@ -1,40 +1,43 @@
 use litesim::prelude::*;
 
-pub struct PingPongEvent;
-impl Event for PingPongEvent {
-    fn type_id() -> &'static str {
-        "ping_pong"
-    }
-}
-
 pub struct Player;
 
-impl Model<PingPongEvent> for Player {
-    declare_connectors! {
-        input: ["recieve"],
-        output: ["send"]
+/*
+#[litesim]
+impl<'s> Model<'s> for Player {
+    #[input]
+    fn receive(&mut self, _: Event<PingPongEvent>, ctx: SimulationCtx<'s>) {
+        ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
+        Ok(())
+    },
+
+    #[output]
+    fn send(&self, data: PingPongEvent);
+
+    fn handle_update(&mut self, ctx: SimulationCtx<'s>) -> Result<(), SimulationError> {
+        // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
+        log::info!("Sending");
+        self.send(PingPongEvent)
+    }
+}
+*/
+
+#[litesim_model]
+impl<'s> Model<'s> for Player {
+    #[input(signal)]
+    fn receive(&self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+        ctx.schedule_change(In(ctx.rand_range(0.0..1.0)))?;
+        Ok(())
     }
 
-    fn handle_input<'s>(
-        &mut self,
-        _event: PingPongEvent,
-        connector: litesim::util::CowStr<'s>,
-        sim: SimulationCtx,
-        source: EventSource<'s>,
-    ) -> InputEffect<'s, PingPongEvent> {
-        log::info!(
-            "Player {} received ball on connector: {}, from {:?}, at: {}",
-            sim.owner,
-            connector,
-            source,
-            sim.time,
-        );
-        InputEffect::ScheduleInternal(sim.time + sim.rand_range(0.0..1.0))
-    }
+    #[output(signal)]
+    fn send(&self);
 
-    fn handle_change<'s>(&mut self, sim: SimulationCtx<'s>) -> ChangeEffect<'s, PingPongEvent> {
-        log::info!("Player {} bounced at: {}", sim.owner, sim.time);
-        ChangeEffect::Produce(ProducedEvent::new_instant(PingPongEvent, "send", None))
+    fn handle_update(&mut self, _: ModelCtx<'s>) -> Result<(), SimulationError> {
+        // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
+        log::info!("Sending");
+        self.send()?;
+        Ok(())
     }
 }
 
@@ -48,15 +51,15 @@ fn main() {
     system.push_model("p1", Player);
     system.push_model("p2", Player);
 
-    system.push_route(route!(p1::send -> p2::recieve));
-    system.push_route(route!(p2::send -> p1::recieve));
+    system.push_route(route!(p1::send -> p2::receive));
+    system.push_route(route!(p2::send -> p1::receive));
 
     let mut sim = Simulation::new(rand::thread_rng(), system, 0.0).expect("invalid model");
 
     sim.scheduler_mut()
         .schedule_event(
             0.5,
-            RoutedEvent::new_external(PingPongEvent, connection!(p1::recieve)),
+            RoutedEvent::new_external(Signal::new(()), connection!(p1::receive)),
         )
         .expect("unable to schedule initial event");
 

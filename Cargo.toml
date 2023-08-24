@@ -1,3 +1,9 @@
+[workspace]
+members = ["./crates/litesim_macros", "./crates/litesim_models"]
+
+default-members = ["./crates/litesim_macros", "./crates/litesim_models"]
+
+
 [package]
 name = "litesim"
 description = "A discrete event simulation library"
@@ -14,6 +20,8 @@ rand = "0.8"
 
 float-ord = { version = "0.3", optional = true }
 chrono = { version = "0.4", optional = true, features = ["serde"] }
+
+litesim_macros = { path = "./crates/litesim_macros" }
 
 thiserror = "1.0"
 

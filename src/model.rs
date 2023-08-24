@@ -1,9 +1,10 @@
-use std::fmt::Debug;
+use std::{any::TypeId, fmt::Debug};
 
 use crate::{
-    event::{Event, ProducedEvent},
-    prelude::SimulationTime,
-    simulation::SimulationCtx,
+    error::{RoutingError, SimulationError},
+    event::{Event, Message},
+    prelude::{ConnectorCtx, ErasedEvent},
+    simulation::ModelCtx,
     util::CowStr,
 };
 
@@ -33,46 +34,8 @@ impl Debug for ConnectorPath<'_> {
 macro_rules! connection {
     ($model:tt :: $connector:tt) => {
         ::litesim::model::ConnectorPath {
-            model: ::litesim::util::CowStr::Borrowed(stringify!($model)),
-            connector: ::litesim::util::CowStr::Borrowed(stringify!($connector)),
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! declare_connectors {
-    {input: [$($input: literal),*], output: [$($output: literal),*]} => {
-        fn input_connectors<'s>(&'s self) -> Vec<::litesim::util::CowStr<'s>> {
-            vec![$(::litesim::util::CowStr::Borrowed($input),
-            )*]
-        }
-        fn output_connectors<'s>(&'s self) -> Vec<::litesim::util::CowStr<'s>> {
-            vec![$(::litesim::util::CowStr::Borrowed($output),
-            )*]
-        }
-    };
-    {output: [$($output: literal),*], input: [$($input: literal),*]} => {
-        declare_connectors!{
-            input: [$($input),*],
-            output: [$($output),*]
-        }
-    };
-    {input: [$($input: literal),*]} => {
-        declare_connectors!{
-            input: [$($input),*],
-            output: []
-        }
-    };
-    {output: [$($output: literal),*]} => {
-        declare_connectors!{
-            input: [],
-            output: [$($output),*]
-        }
-    };
-    {} => {
-        declare_connectors!{
-            input: [],
-            output: []
+            model: std::borrow::Cow::Borrowed(stringify!($model)),
+            connector: std::borrow::Cow::Borrowed(stringify!($connector)),
         }
     };
 }
@@ -150,69 +113,172 @@ impl<'s> From<(&ConnectorPath<'s>, &ConnectorPath<'s>)> for Route<'s> {
     }
 }
 
-pub enum InputEffect<'a, E: Event> {
-    /// Signals that the model consumed input event
-    Consume,
-    /// Signals that the model dropped input event
-    Drop(E),
-    /// Signals that an internal change should occur at provided time
-    ScheduleInternal(SimulationTime),
-    /// Signals that an event was produced as a consequence of receiving input event
-    Produce(ProducedEvent<'a, E>),
+pub trait InputHandler<'s>:
+    Fn(&mut Self::Model, Event<Self::In>, ModelCtx<'s>) -> Result<(), SimulationError>
+{
+    type Model: Model<'s> + 'static;
+    type In: Message;
+}
+impl<'s, S: Model<'s> + 'static, M: Message> InputHandler<'s>
+    for &dyn Fn(&mut S, Event<M>, ModelCtx<'s>) -> Result<(), SimulationError>
+{
+    type Model = S;
+    type In = M;
 }
 
-pub enum ChangeEffect<'a, E: Event> {
-    /// Model state hasn't changed and requires no neighbor updates
-    None,
-    /// Signals that an internal change should occur at provided time
-    ScheduleInternal(SimulationTime),
-    /// Signals that an event was created
-    Produce(ProducedEvent<'a, E>),
+pub trait ErasedInputHandler<'h, 's: 'h>: 'h {
+    fn apply_event(&self, event: ErasedEvent, ctx: ConnectorCtx<'s>)
+        -> Result<(), SimulationError>;
+    fn model_type_id(&self) -> TypeId;
+    fn event_type_id(&self) -> TypeId;
 }
 
-#[allow(unused_variables)]
-pub trait Model<E: Event> {
+impl<'h, 's: 'h, C: InputHandler<'s> + 'h> ErasedInputHandler<'h, 's> for C {
+    fn apply_event(
+        &self,
+        event: ErasedEvent,
+        ctx: ConnectorCtx<'s>,
+    ) -> Result<(), SimulationError> {
+        let casted = event
+            .try_restore_type()
+            .map_err(|got| RoutingError::InvalidEventType {
+                event_type: got.type_name,
+                expected: std::any::type_name::<C::In>(),
+            })?;
+
+        let ConnectorCtx {
+            model_ctx,
+            mut on_model,
+        } = ctx;
+
+        let model = unsafe {
+            on_model
+                .cast_mut::<C::Model>()
+                .ok_or_else(|| RoutingError::InvalidModelType {
+                    expected: std::any::type_name::<C::Model>(),
+                })?
+        };
+        self(model, casted, model_ctx)?;
+        Ok(())
+    }
+
+    fn model_type_id(&self) -> TypeId {
+        TypeId::of::<C::Model>()
+    }
+
+    fn event_type_id(&self) -> TypeId {
+        TypeId::of::<C::In>()
+    }
+}
+
+pub struct OutputConnectorInfo(&'static str, TypeId);
+
+impl OutputConnectorInfo {
+    pub const fn new<T: 'static>(id: &'static str) -> Self {
+        OutputConnectorInfo(id, TypeId::of::<T>())
+    }
+}
+
+pub trait Model<'s> {
     /// Lists all model input connectors
-    fn input_connectors<'s>(&'s self) -> Vec<CowStr<'s>>;
+    ///
+    /// Returned value must stay the same for each model instance for the
+    /// duration of the simulation.
+    fn input_connectors(&self) -> Vec<&'static str>;
     /// Lists all model output connectors
-    fn output_connectors<'s>(&'s self) -> Vec<CowStr<'s>>;
+    ///
+    /// Returned value must stay the same for each model instance for the
+    /// duration of the simulation.
+    fn output_connectors(&self) -> Vec<OutputConnectorInfo>;
 
-    /// Returns true if this model has given input connector
-    fn has_input_connector<'s>(&'s self, id: &str) -> bool {
-        self.input_connectors()
-            .into_iter()
-            .find(|c| c.as_ref() == id)
-            .is_some()
-    }
-    fn has_output_connector<'s>(&'s self, id: &str) -> bool {
-        self.output_connectors()
-            .into_iter()
-            .find(|c| c.as_ref() == id)
-            .is_some()
+    /// Returns input handlers for all input connectors.
+    ///
+    /// Index argument matches indices of [Self::input_connectors].
+    fn get_input_handler<'h>(&self, index: usize) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
+    where
+        's: 'h;
+
+    /// Called during initalization.
+    ///
+    /// This method allows models like generators to schedule their inital changes.
+    #[allow(unused_variables)]
+    fn init(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+        Ok(())
     }
 
-    /// Handler for external event inputs.
-    #[must_use]
-    fn handle_input<'s>(
-        &mut self,
-        event: E,
-        connector: CowStr<'s>,
-        ctx: SimulationCtx,
-        source: EventSource<'s>,
-    ) -> InputEffect<'s, E> {
-        InputEffect::Drop(event)
-    }
     /// Handler for internal model changes when the elapsed time is supposed to affect
     /// the state of the model.
-    #[must_use]
-    fn handle_change<'s>(&mut self, ctx: SimulationCtx<'s>) -> ChangeEffect<'s, E> {
-        ChangeEffect::None
+    #[allow(unused_variables)]
+    fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+        Ok(())
     }
-    /// Returns time of next expected internal change.
-    ///
-    /// This method is allowed to modify the model to store the returned value.
-    #[must_use]
-    fn next_change_time<'s>(&mut self, ctx: SimulationCtx<'s>) -> Option<SimulationTime> {
-        None
+
+    fn type_id(&self) -> TypeId;
+}
+
+pub trait ModelImpl<'s>: Model<'s> {
+    fn get_input_handler_by_name<'h>(
+        &self,
+        name: impl AsRef<str>,
+    ) -> Option<Box<dyn ErasedInputHandler<'h, 's>>>
+    where
+        's: 'h,
+    {
+        let i = self
+            .input_connectors()
+            .iter()
+            .enumerate()
+            .find(|(_, it)| **it == name.as_ref())
+            .map(|it| it.0)?;
+
+        self.get_input_handler(i)
     }
+
+    fn input_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
+        let handler = self.get_input_handler_by_name(name)?;
+        Some(handler.event_type_id())
+    }
+
+    fn output_type_id(&self, name: impl AsRef<str>) -> Option<TypeId> {
+        self.output_connectors()
+            .iter()
+            .find(|it| it.0 == name.as_ref())
+            .map(|it| it.1.clone())
+    }
+}
+
+impl<'s, M: Model<'s> + ?Sized> ModelImpl<'s> for M {}
+
+#[macro_export]
+macro_rules! push_event {
+    ($ctx: ident, $id: literal, $msg: expr) => {
+        $ctx.push_event_with_source(
+            ::litesim::event::Event::new($msg),
+            None,
+            std::borrow::Cow::Borrowed($id),
+        )
+    };
+    ($ctx: ident, $id: literal, $msg: expr, $time: expr) => {
+        $ctx.push_event_with_time_and_source(
+            ::litesim::event::Event::new($msg),
+            $time,
+            None,
+            std::borrow::Cow::Borrowed($id),
+        )
+    };
+    ($ctx: ident, $id: literal, $msg: expr, Now, $target: literal) => {
+        $ctx.push_event_with_source(
+            ::litesim::event::Event::new($msg),
+            Some(std::borrow::Cow::Borrowed($target)),
+            std::borrow::Cow::Borrowed($id),
+        )
+    };
+    ($ctx: ident, $id: literal, $msg: expr, $time: expr, $target: literal) => {
+        $ctx.push_event_with_time_and_source(
+            ::litesim::event::Event::new($msg),
+            $time,
+            Some(std::borrow::Cow::Borrowed($target)),
+            std::borrow::Cow::Borrowed($id),
+        )
+    };
 }

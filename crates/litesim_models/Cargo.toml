@@ -1,0 +1,11 @@
+[package]
+name = "litesim_models"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+litesim = { path = "../.." }
+
+[features]
+default = ["queue"]
+queue = []

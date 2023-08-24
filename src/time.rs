@@ -84,8 +84,8 @@ impl Display for SimulationTime {
 #[derive(Clone)]
 pub enum TimeTrigger {
     Now,
-    At { time: SimTimeValue },
-    In { delay: SimDuration },
+    At(SimTimeValue),
+    In(SimDuration),
 }
 
 impl TimeTrigger {
@@ -94,18 +94,18 @@ impl TimeTrigger {
     }
 
     pub fn specific(time: SimTimeValue) -> TimeTrigger {
-        TimeTrigger::At { time }
+        TimeTrigger::At(time)
     }
 
     pub fn relative(delay: SimDuration) -> TimeTrigger {
-        TimeTrigger::In { delay }
+        TimeTrigger::In(delay)
     }
 
     pub fn to_discrete(self, current: SimulationTime) -> SimulationTime {
         match self {
             TimeTrigger::Now => current,
-            TimeTrigger::At { time } => SimulationTime::new(time.clone()),
-            TimeTrigger::In { delay } => current + delay.clone(),
+            TimeTrigger::At(time) => SimulationTime::new(time.clone()),
+            TimeTrigger::In(delay) => current + delay.clone(),
         }
     }
 }

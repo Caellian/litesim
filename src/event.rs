@@ -1,78 +1,94 @@
+use std::any::{Any, TypeId};
+
 use crate::{
-    error::SimulationError,
     model::{ConnectorPath, Route},
-    prelude::{EventSource, TimeTrigger},
-    time::{SimDuration, SimTimeValue},
-    util::{CowStr, ToCowStr},
+    prelude::EventSource,
 };
 
-pub trait Event: 'static {
-    fn type_id() -> &'static str;
+pub trait Message: Any + 'static {}
+impl<T> Message for T where T: Any {}
+
+pub struct Event<M: Message> {
+    type_info: TypeId,
+    pub data: Box<M>,
 }
 
-pub struct ProducedEvent<'a, E: Event> {
-    pub event: E,
-    pub source_connector: CowStr<'a>,
-    pub(crate) target: Option<ConnectorPath<'a>>,
-    pub(crate) scheduling: TimeTrigger,
-}
-
-impl<'a, E: Event> ProducedEvent<'a, E> {
-    pub fn new(
-        event: E,
-        source_connector: CowStr<'a>,
-        target: Option<ConnectorPath<'a>>,
-        scheduling: TimeTrigger,
-    ) -> Self {
-        Self {
-            event,
-            source_connector,
-            target,
-            scheduling,
+impl<M: Message> Event<M> {
+    pub fn new(data: M) -> Self {
+        Event {
+            type_info: TypeId::of::<M>(),
+            data: Box::new(data),
         }
     }
 
-    pub fn new_instant(
-        event: E,
-        source_connector: impl ToCowStr<'a>,
-        target: Option<ConnectorPath<'a>>,
-    ) -> ProducedEvent<'a, E> {
-        ProducedEvent {
-            event,
-            source_connector: source_connector.to_cow_str(),
-            target,
-            scheduling: TimeTrigger::Now,
+    /// Erasing event type information makes it unsafe to drop the event until
+    /// Message type has been restored to original value. Doing so will cause a
+    /// memory leak.
+    pub(crate) unsafe fn erase_message_type(self) -> ErasedEvent {
+        let data: *const Box<M> = &self.data;
+
+        ErasedEvent {
+            type_id: self.type_info,
+            type_name: std::any::type_name::<M>(),
+            data: data as *const Box<ErasedMessage>,
         }
     }
 
-    pub fn scheduled_at(self, time: SimTimeValue) -> Self {
-        ProducedEvent {
-            event: self.event,
-            source_connector: self.source_connector,
-            target: self.target,
-            scheduling: TimeTrigger::At { time },
-        }
+    pub fn inner(&self) -> &M {
+        &*self.data
     }
 
-    pub fn scheduled_in(self, delay: SimDuration) -> Self {
-        ProducedEvent {
-            event: self.event,
-            source_connector: self.source_connector,
-            target: self.target,
-            scheduling: TimeTrigger::In { delay },
-        }
+    pub fn into_inner(self) -> M {
+        *self.data
     }
 }
 
-pub struct RoutedEvent<'s, E: Event> {
-    pub event: E,
+pub type Signal = Event<()>;
+
+struct ErasedMessage;
+pub struct ErasedEvent {
+    pub(crate) type_id: TypeId,
+    pub(crate) type_name: &'static str,
+    data: *const Box<ErasedMessage>,
+}
+
+impl ErasedEvent {
+    pub fn try_restore_type<M: Message>(self) -> Result<Event<M>, ErasedEvent> {
+        let data = self.data as *const Box<M>;
+        unsafe {
+            if self.type_id == TypeId::of::<M>() {
+                Ok(Event {
+                    type_info: self.type_id,
+                    data: std::ptr::read(data),
+                })
+            } else {
+                Err(self)
+            }
+        }
+    }
+}
+
+impl<M: Message> From<Event<M>> for ErasedEvent {
+    fn from(value: Event<M>) -> Self {
+        unsafe { value.erase_message_type() }
+    }
+}
+
+impl<M: Message> From<M> for Event<M> {
+    fn from(value: M) -> Self {
+        Event::new(value)
+    }
+}
+
+pub struct RoutedEvent<'s> {
+    pub event: ErasedEvent,
     pub route: Route<'s>,
 }
 
-impl<'s, E: Event> RoutedEvent<'s, E> {
-    pub fn new_external(event: E, target: ConnectorPath<'s>) -> Self {
+impl<'s> RoutedEvent<'s> {
+    pub fn new_external(event: impl Into<ErasedEvent>, target: ConnectorPath<'s>) -> Self {
         Self {
-            event,
+            event: event.into(),
             route: Route {
                 from: EventSource::External,
                 to: target,
@@ -80,30 +96,10 @@ impl<'s, E: Event> RoutedEvent<'s, E> {
         }
     }
 
-    pub fn new(event: E, route: Route<'s>) -> Self {
-        Self { event, route }
-    }
-
-    pub fn from_produced(
-        source_model: CowStr<'s>,
-        event: ProducedEvent<'s, E>,
-        default_target: Option<ConnectorPath<'s>>,
-    ) -> Result<Self, SimulationError> {
-        let route = Route::new_internal(
-            ConnectorPath {
-                model: source_model.clone(),
-                connector: event.source_connector,
-            },
-            event
-                .target
-                .or(default_target)
-                .ok_or(SimulationError::MissingEventTarget {
-                    model: source_model.to_string(),
-                })?,
-        );
-        Ok(Self {
-            event: event.event,
+    pub fn new(event: impl Into<ErasedEvent>, route: Route<'s>) -> Self {
+        Self {
+            event: event.into(),
             route,
-        })
+        }
     }
 }
