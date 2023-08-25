@@ -311,9 +311,10 @@ impl Parse for ModelTraitImpl {
         };
 
         for out_fns in &details {
-            if out_fns.kind.is_none() {
-                continue;
-            }
+            let kind = match out_fns.kind {
+                Some(kind) => kind,
+                None => continue,
+            };
             let sig = out_fns.item.signature();
             let signal = out_fns.attrib_args.signal;
             let in_name = sig.ident.to_string();
@@ -323,6 +324,7 @@ impl Parse for ModelTraitImpl {
                 .clone()
                 .unwrap_or_else(|| sig.ident.to_string());
             connector_mapper.methods.push(OCMInfo {
+                kind,
                 in_name,
                 out_name,
                 signal,
@@ -366,11 +368,11 @@ impl Parse for ModelTraitImpl {
 
                             if let Some(ctx_name) = ctx_name {
                                 item_fn.block =
-                                    connector_mapper.process_block(&item_fn.block, ctx_name);
+                                    connector_mapper.process_block(&item_fn.block, ctx_name)?;
                             } else {
                                 let wild_ident = Ident::new("model_context_", Span::call_site());
                                 item_fn.block =
-                                    connector_mapper.process_block(&item_fn.block, &wild_ident);
+                                    connector_mapper.process_block(&item_fn.block, &wild_ident)?;
                                 match last_arg {
                                     FnArg::Typed(PatType { pat, .. }) => {
                                         *pat = Box::new(ident_to_pat(wild_ident))
@@ -405,12 +407,12 @@ impl Parse for ModelTraitImpl {
                     if let Some(ctx_arg) = find_ctx_arg_mut(&mut item.sig) {
                         match &mut *ctx_arg.pat {
                             Pat::Ident(PatIdent { ident, .. }) => {
-                                item.block = connector_mapper.process_block(&item.block, ident);
+                                item.block = connector_mapper.process_block(&item.block, ident)?;
                             }
                             Pat::Wild(_) => {
                                 let wild_ident = Ident::new("model_context_", Span::call_site());
                                 item.block =
-                                    connector_mapper.process_block(&item.block, &wild_ident);
+                                    connector_mapper.process_block(&item.block, &wild_ident)?;
                                 ctx_arg.pat = Box::new(ident_to_pat(wild_ident))
                             }
                             _ => unreachable!(),

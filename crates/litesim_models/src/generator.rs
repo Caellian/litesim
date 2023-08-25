@@ -1,12 +1,16 @@
 use std::{cell::RefCell, marker::PhantomData};
 
 use litesim::prelude::*;
-use rand::{distributions::Standard, prelude::Distribution, rngs::ThreadRng, Rng};
+use rand::{prelude::Distribution, rngs::ThreadRng, Rng};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Generator<T, Rng: SimulationRng = ThreadRng, D: Distribution<T> = Standard> {
-    generator: Option<Rng>,
-    distribution: D,
+pub struct Generator<
+    T,
+    Rng: SimulationRng = ThreadRng,
+    D: Distribution<T> = rand::distributions::Uniform<T>,
+> {
+    pub(crate) generator: Option<Rng>,
+    pub(crate) distribution: D,
     _phantom: PhantomData<T>,
 }
 
@@ -32,44 +36,24 @@ impl<T, Rng: SimulationRng, D: Distribution<T>> Generator<T, Rng, D> {
     }
 }
 
-impl<T, Rng: SimulationRng> Generator<T, Rng>
-where
-    Standard: Distribution<T>,
-{
-    pub fn new_standard(generator: Option<Rng>) -> Self {
-        Self::new(generator, Standard)
-    }
-}
-
 impl<T, D: Distribution<T>> Generator<T, ThreadRng, D> {
-    pub fn new_shared() -> Generator<T, ThreadRng, D>
-    where
-        D: Default,
-    {
-        Self::new(None::<ThreadRng>, Default::default())
+    pub fn new_shared(distribution: D) -> Generator<T, ThreadRng, D> {
+        Self::new(None::<ThreadRng>, distribution)
+    }
+
+    pub fn new_thread(distribution: D) -> Self {
+        Self::new(Some(rand::thread_rng()), distribution)
     }
 }
 
-impl<T> Generator<T>
-where
-    Standard: Distribution<T>,
-{
-    pub fn new_shared_standard() -> Self {
-        Self::new(None, Standard)
-    }
-
-    pub fn new_thread_standard() -> Self {
-        Self::new(Some(rand::thread_rng()), Standard)
-    }
-}
-
+#[cfg(feature = "generator")]
 #[litesim_model]
 impl<'s, T: 'static, Rng: SimulationRng, D: Distribution<T> + 'static> Model<'s>
     for Generator<T, Rng, D>
 {
     #[input(signal)]
     fn generate(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
-        ctx.schedule_change(Now)?;
+        ctx.schedule_update(Now)?;
         Ok(())
     }
 

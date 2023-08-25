@@ -1,7 +1,5 @@
 use std::any::{Any, TypeId};
 
-use crate::routes::{ConnectorPath, EventSource, Route};
-
 pub trait Message: Any + 'static {}
 impl<T> Message for T where T: Any {}
 
@@ -42,6 +40,11 @@ impl<M: Message> Event<M> {
 
 pub type Signal = Event<()>;
 
+#[allow(non_snake_case)]
+pub fn Signal() -> Signal {
+    Signal::new(())
+}
+
 struct ErasedMessage;
 pub struct ErasedEvent {
     pub(crate) type_id: TypeId,
@@ -74,29 +77,5 @@ impl<M: Message> From<Event<M>> for ErasedEvent {
 impl<M: Message> From<M> for Event<M> {
     fn from(value: M) -> Self {
         Event::new(value)
-    }
-}
-
-pub struct RoutedEvent<'s> {
-    pub(crate) event: ErasedEvent,
-    pub(crate) route: Route<'s>,
-}
-
-impl<'s> RoutedEvent<'s> {
-    pub fn new_external(event: impl Into<ErasedEvent>, target: ConnectorPath<'s>) -> Self {
-        Self {
-            event: event.into(),
-            route: Route {
-                from: EventSource::External,
-                to: target,
-            },
-        }
-    }
-
-    pub fn new(event: impl Into<ErasedEvent>, route: Route<'s>) -> Self {
-        Self {
-            event: event.into(),
-            route,
-        }
     }
 }

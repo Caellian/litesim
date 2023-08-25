@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::prelude::SimulationTime;
+use crate::prelude::Time;
 
 #[derive(Debug, Error)]
 pub enum ValidationError {
@@ -17,6 +17,8 @@ pub enum ValidationError {
     },
     #[error("Connector '{connector}' takes in a wrong model type")]
     InvalidConnectorModel { connector: &'static str },
+    #[error("Output connector '{connector}' connects to multiple inputs")]
+    RepeatedOutput { connector: String },
     #[error("Model store error: {0}")]
     ModelStore(
         #[from]
@@ -28,10 +30,7 @@ pub enum ValidationError {
 #[derive(Debug, Error)]
 pub enum SchedulerError {
     #[error("Tried scheduling an occurence in the past: {insertion}; current time is: {current}")]
-    TimeRegression {
-        current: SimulationTime,
-        insertion: SimulationTime,
-    },
+    TimeRegression { current: Time, insertion: Time },
 }
 
 #[derive(Debug, Error)]

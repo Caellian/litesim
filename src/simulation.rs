@@ -1,39 +1,50 @@
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap},
+    ops::RangeBounds,
     pin::Pin,
-    rc::Rc,
 };
 
-use rand::Rng;
+#[cfg(feature = "rand")]
+mod rand_imports {
+    pub use std::cell::RefCell;
+    pub use std::rc::Rc;
+
+    pub use rand::Rng;
+
+    pub use crate::util::SimulationRng;
+}
+#[cfg(feature = "rand")]
+use rand_imports::*;
 
 use crate::{
     error::{RoutingError, SchedulerError, SimulationError},
-    event::{Event, Message, RoutedEvent},
+    event::{Event, Message},
     model::ModelImpl,
-    prelude::BorrowedModel,
+    prelude::{BorrowedModel, ErasedEvent, TimeBounds},
     routes::{ConnectorPath, EventSource, Route},
     system::{AdjacentModels, SystemModel},
-    time::{SimulationTime, TimeTrigger},
-    util::{CowStr, SimulationRng, ToCowStr},
+    time::{Time, TimeTrigger},
+    util::{CowStr, ToCowStr},
 };
 
 #[allow(dead_code)]
 pub struct Simulation<'s> {
+    #[cfg(feature = "rand")]
     global_rng: Rc<RefCell<dyn SimulationRng>>,
     system: Pin<Box<SystemModel<'s>>>,
-    initial_time: SimulationTime,
+    initial_time: Time,
     scheduler: Pin<Box<Scheduler<'s>>>,
 }
 
 impl<'s> Simulation<'s> {
     pub fn new(
-        rng: impl SimulationRng + 'static,
+        #[cfg(feature = "rand")] rng: impl SimulationRng + 'static,
         mut system: SystemModel<'s>,
-        initial_time: impl Into<SimulationTime>,
+        initial_time: impl Into<Time>,
     ) -> Result<Self, SimulationError> {
         system.validate()?;
 
+        #[cfg(feature = "rand")]
         let global_rng = Rc::new(RefCell::new(rng));
         let initial_time = initial_time.into();
 
@@ -42,6 +53,7 @@ impl<'s> Simulation<'s> {
             let sim_ref = ModelCtx::new_parameterized(
                 &system.route_cache,
                 initial_time,
+                #[cfg(feature = "rand")]
                 global_rng.clone(),
                 id.clone(),
                 &mut scheduler,
@@ -51,6 +63,7 @@ impl<'s> Simulation<'s> {
         }
 
         Ok(Simulation {
+            #[cfg(feature = "rand")]
             global_rng,
             system: Box::pin(system),
             initial_time,
@@ -58,20 +71,34 @@ impl<'s> Simulation<'s> {
         })
     }
 
-    pub fn scheduler(&self) -> &Scheduler<'s> {
-        &self.scheduler
+    #[inline]
+    pub fn schedule_event<M: Message>(
+        &mut self,
+        time: impl Into<Time>,
+        event: Event<M>,
+        target: ConnectorPath<'s>,
+    ) -> Result<(), SchedulerError> {
+        self.scheduler.schedule(
+            time.into(),
+            Scheduled::Event {
+                event: event.into(),
+                route: Route {
+                    from: EventSource::External,
+                    to: target,
+                },
+            },
+        )
     }
 
-    pub fn scheduler_mut(&mut self) -> &mut Scheduler<'s> {
-        &mut self.scheduler
-    }
-
-    pub fn current_time(&self) -> SimulationTime {
+    pub fn current_time(&self) -> Time {
         self.scheduler.time
     }
 
-    pub fn route_event(&mut self, event: RoutedEvent<'s>) -> Result<(), SimulationError> {
-        let RoutedEvent { event, route } = event;
+    pub fn route_event(
+        &mut self,
+        event: ErasedEvent,
+        route: Route<'s>,
+    ) -> Result<(), SimulationError> {
         let target_model = route.to.model.clone();
         let target_connector = route.to.connector.clone();
 
@@ -116,8 +143,8 @@ impl<'s> Simulation<'s> {
 
                     model.handle_update(state)?;
                 }
-                Scheduled::Event(event) => {
-                    self.route_event(event)?;
+                Scheduled::Event { event, route } => {
+                    self.route_event(event, route)?;
                 }
             }
         }
@@ -126,7 +153,7 @@ impl<'s> Simulation<'s> {
     }
 
     /// Runs simulation until passed time is reached (inclusive) or the simulated system becomes inert
-    pub fn run_until(&mut self, time: impl Into<SimulationTime>) -> Result<(), SimulationError> {
+    pub fn run_until(&mut self, time: impl Into<Time>) -> Result<(), SimulationError> {
         let max_time = time.into();
 
         while let Some(expected_time) = self.scheduler.get_next_time() {
@@ -142,12 +169,13 @@ impl<'s> Simulation<'s> {
 
     /// Runs simulation until the simulated system becomes inert
     pub fn run(&mut self) -> Result<(), SimulationError> {
-        self.run_until(SimulationTime::MAX)
+        self.run_until(Time::MAX)
     }
 }
 
 pub struct ModelCtx<'s> {
-    pub time: SimulationTime,
+    pub time: Time,
+    #[cfg(feature = "rand")]
     pub rng: Rc<RefCell<dyn SimulationRng>>,
     pub model_id: CowStr<'s>,
     pub routes: AdjacentModels<'s>,
@@ -167,6 +195,7 @@ impl<'s> ModelCtx<'s> {
 
         ModelCtx {
             time: simulation.current_time(),
+            #[cfg(feature = "rand")]
             rng: simulation.global_rng.clone(),
             model_id: model,
             routes,
@@ -176,8 +205,8 @@ impl<'s> ModelCtx<'s> {
 
     fn new_parameterized(
         route_cache: &HashMap<CowStr<'s>, AdjacentModels<'s>>,
-        time: SimulationTime,
-        rng: Rc<RefCell<dyn SimulationRng>>,
+        time: Time,
+        #[cfg(feature = "rand")] rng: Rc<RefCell<dyn SimulationRng>>,
         model: CowStr<'s>,
         scheduler: &mut Pin<Box<Scheduler<'s>>>,
     ) -> Self {
@@ -187,6 +216,7 @@ impl<'s> ModelCtx<'s> {
 
         ModelCtx {
             time,
+            #[cfg(feature = "rand")]
             rng,
             model_id: model,
             routes,
@@ -198,6 +228,7 @@ impl<'s> ModelCtx<'s> {
         &self.model_id
     }
 
+    #[cfg(feature = "rand")]
     pub fn rand<T>(&self) -> T
     where
         rand::distributions::Standard: rand::prelude::Distribution<T>,
@@ -205,6 +236,7 @@ impl<'s> ModelCtx<'s> {
         self.rng.borrow_mut().gen()
     }
 
+    #[cfg(feature = "rand")]
     pub fn rand_range<T, R>(&self, range: R) -> T
     where
         T: rand::distributions::uniform::SampleUniform,
@@ -213,54 +245,90 @@ impl<'s> ModelCtx<'s> {
         self.rng.borrow_mut().gen_range(range)
     }
 
-    pub fn schedule_change(&self, time: TimeTrigger) -> Result<(), SimulationError> {
+    pub fn cancel_updates(&self) {
+        unsafe {
+            (*self.scheduler).cancel_updates(self.model_id().clone(), None);
+        }
+    }
+
+    pub fn cancel_updates_bounded(&self, range: TimeBounds) {
+        unsafe {
+            (*self.scheduler).cancel_updates(self.model_id().clone(), Some(range));
+        }
+    }
+
+    pub fn schedule_update(&self, time: TimeTrigger) -> Result<(), SimulationError> {
         unsafe {
             (*self.scheduler)
-                .schedule_change(time.to_discrete(self.time), self.model_id().clone())?;
+                .schedule_update(time.to_discrete(self.time), self.model_id().clone())?;
         }
         Ok(())
     }
 
-    pub fn push_event_with_time_and_source<M: Message>(
+    pub fn push_event_with_time<M: Message>(
         &self,
         event: Event<M>,
-        target: Option<ConnectorPath<'s>>,
-        time: impl Into<SimulationTime>,
-        source_connector: CowStr<'s>,
+        output_connector: CowStr<'s>,
+        time: TimeTrigger,
     ) -> Result<(), SimulationError> {
-        let target = target
-            .or_else(|| match self.routes.outputs.first() {
-                Some(first) if self.routes.outputs.len() == 1 => Some(first.to.clone()),
-                _ => None,
-            })
-            .ok_or(RoutingError::MissingEventTarget {
-                model: self.model_id().to_string(),
-            })?;
-        unsafe {
-            let routed = RoutedEvent::new(
-                event.erase_message_type(),
-                Route {
-                    from: EventSource::Model(ConnectorPath {
-                        model: self.model_id().clone(),
-                        connector: source_connector,
-                    }),
-                    to: target,
-                },
-            );
+        let target = match self.routes.adjacent_input(output_connector.clone()) {
+            Some(first) => first,
+            _ => return Ok(()),
+        };
 
-            (*self.scheduler).schedule_event(time, routed)?;
+        let from = EventSource::Model(ConnectorPath {
+            model: self.model_id().clone(),
+            connector: output_connector,
+        });
+
+        unsafe {
+            (*self.scheduler).schedule_event(
+                time.to_discrete(self.time),
+                event.erase_message_type(),
+                Route { from, to: target },
+            )?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    pub fn push_event_with_source<M: Message>(
+    pub fn push_event<M: Message>(
         &self,
         event: Event<M>,
-        target: Option<ConnectorPath<'s>>,
         source_connector: CowStr<'s>,
     ) -> Result<(), SimulationError> {
-        self.push_event_with_time_and_source(event, target, self.time, source_connector)
+        self.push_event_with_time(event, source_connector, TimeTrigger::Absolute(self.time))
+    }
+
+    pub fn internal_event_with_time<M: Message>(
+        &self,
+        event: Event<M>,
+        target_connector: CowStr<'s>,
+        time: TimeTrigger,
+    ) -> Result<(), SimulationError> {
+        unsafe {
+            (*self.scheduler).schedule_event(
+                time.to_discrete(self.time),
+                event.erase_message_type(),
+                Route {
+                    from: EventSource::Internal,
+                    to: ConnectorPath {
+                        model: self.model_id().clone(),
+                        connector: target_connector,
+                    },
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn internal_event<M: Message>(
+        &self,
+        event: Event<M>,
+        target_connector: CowStr<'s>,
+    ) -> Result<(), SimulationError> {
+        self.internal_event_with_time(event, target_connector, TimeTrigger::Absolute(self.time))
     }
 }
 
@@ -271,27 +339,26 @@ pub struct ConnectorCtx<'s> {
 
 pub enum Scheduled<'s> {
     Internal(CowStr<'s>),
-    Event(RoutedEvent<'s>),
+    Event {
+        event: ErasedEvent,
+        route: Route<'s>,
+    },
 }
 
 pub struct Scheduler<'s> {
-    pub time: SimulationTime,
-    scheduled: BTreeMap<SimulationTime, Vec<Scheduled<'s>>>,
+    pub time: Time,
+    scheduled: BTreeMap<Time, Vec<Scheduled<'s>>>,
 }
 
 impl<'s> Scheduler<'s> {
-    pub fn new(current_time: SimulationTime) -> Self {
+    pub fn new(current_time: Time) -> Self {
         Scheduler {
             time: current_time,
             scheduled: BTreeMap::new(),
         }
     }
 
-    fn schedule(
-        &mut self,
-        time: SimulationTime,
-        value: Scheduled<'s>,
-    ) -> Result<(), SchedulerError> {
+    fn schedule(&mut self, time: Time, value: Scheduled<'s>) -> Result<(), SchedulerError> {
         if time < self.time {
             return Err(SchedulerError::TimeRegression {
                 current: self.time.clone(),
@@ -311,10 +378,43 @@ impl<'s> Scheduler<'s> {
         Ok(())
     }
 
+    pub fn cancel_updates(&mut self, model: impl ToCowStr<'s>, bounded: Option<TimeBounds>) {
+        let model = model.to_cow_str();
+
+        fn remove_model<'s>(entries: &mut Vec<Scheduled>, find: &str) {
+            let mut occurences = vec![];
+            for (i, it) in entries.iter().enumerate() {
+                match it {
+                    Scheduled::Internal(model) if model.as_ref() == find => {
+                        occurences.push(i);
+                    }
+                    _ => {}
+                }
+            }
+            occurences.reverse();
+            for i in occurences.into_iter() {
+                entries.remove(i);
+            }
+        }
+
+        if let Some(bounded) = bounded {
+            for (time, values) in self.scheduled.iter_mut() {
+                if !bounded.includes(time) {
+                    break;
+                }
+                remove_model(values, &model);
+            }
+        } else {
+            for values in self.scheduled.values_mut() {
+                remove_model(values, &model);
+            }
+        }
+    }
+
     #[inline]
-    pub fn schedule_change(
+    pub fn schedule_update(
         &mut self,
-        time: impl Into<SimulationTime>,
+        time: impl Into<Time>,
         model: impl ToCowStr<'s>,
     ) -> Result<(), SchedulerError> {
         self.schedule(time.into(), Scheduled::Internal(model.to_cow_str()))
@@ -323,13 +423,20 @@ impl<'s> Scheduler<'s> {
     #[inline]
     pub fn schedule_event(
         &mut self,
-        time: impl Into<SimulationTime>,
-        event: RoutedEvent<'s>,
+        time: impl Into<Time>,
+        event: impl Into<ErasedEvent>,
+        route: Route<'s>,
     ) -> Result<(), SchedulerError> {
-        self.schedule(time.into(), Scheduled::Event(event))
+        self.schedule(
+            time.into(),
+            Scheduled::Event {
+                event: event.into(),
+                route,
+            },
+        )
     }
 
-    pub fn get_next_time(&self) -> Option<SimulationTime> {
+    pub fn get_next_time(&self) -> Option<Time> {
         self.scheduled.first_key_value().map(|(it, _)| it.clone())
     }
 }

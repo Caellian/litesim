@@ -15,25 +15,30 @@ keywords = ["discrete", "event", "simulation"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"], optional = true }
-rand_core = "0.6"
-rand = "0.8"
+rand_core = { version = "0.6", optional = true }
+rand = { version = "0.8", optional = true }
 
 float-ord = { version = "0.3", optional = true }
 chrono = { version = "0.4", optional = true, features = ["serde"] }
 
-litesim_macros = { path = "./crates/litesim_macros" }
+litesim-macros = { path = "./crates/litesim_macros" }
+
+log = "0.4"
 
 thiserror = "1.0"
 
-[dev-dependencies]
-log = "0.4"
-env_logger = "0.10"
-
 [features]
-default = ["time_f32"]
+default = ["time_f32", "serde", "rand"]
 
 serde = ["dep:serde"]
+rand = ["dep:rand_core", "dep:rand"]
 
 time_f32 = ["dep:float-ord"]
 time_f64 = ["dep:float-ord"]
 time_chrono = ["dep:chrono"]
+
+[dev-dependencies]
+log = "0.4"
+env_logger = "0.10"
+litesim-models = { path = "./crates/litesim_models" }
+serde = { version = "1.0", features = ["derive"] }

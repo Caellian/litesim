@@ -37,6 +37,7 @@ macro_rules! connection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventSource<'s> {
     External,
+    Internal,
     Model(ConnectorPath<'s>),
 }
 
@@ -46,27 +47,32 @@ pub struct Route<'s> {
     pub to: ConnectorPath<'s>,
 }
 
-#[macro_export]
-macro_rules! route {
-    ($model_a: tt :: $connector_a: tt -> $model_b: tt :: $connector_b: tt) => {
-        ::litesim::routes::Route::new_internal(
-            connection!($model_a::$connector_a),
-            connection!($model_b::$connector_b),
-        )
-    };
-}
-
 impl<'s> Route<'s> {
-    pub fn new_internal(from: ConnectorPath<'s>, to: ConnectorPath<'s>) -> Self {
+    pub fn new(from: ConnectorPath<'s>, to: ConnectorPath<'s>) -> Self {
         Route {
             from: EventSource::Model(from),
             to,
         }
     }
 
+    pub fn new_external(target: ConnectorPath<'s>) -> Self {
+        Route {
+            from: EventSource::External,
+            to: target,
+        }
+    }
+
+    pub fn new_internal(target: ConnectorPath<'s>) -> Self {
+        Route {
+            from: EventSource::Internal,
+            to: target,
+        }
+    }
+
     pub fn starts_in_model(&self, id: impl AsRef<str>) -> bool {
         match &self.from {
             EventSource::External => false,
+            EventSource::Internal => true,
             EventSource::Model(ConnectorPath {
                 model: model_id, ..
             }) => model_id.as_ref() == id.as_ref(),
@@ -77,10 +83,11 @@ impl<'s> Route<'s> {
         self.to.model.as_ref() == id.as_ref()
     }
 
-    pub fn from_connection(&self) -> ConnectorPath<'s> {
+    pub fn from_connection(&self) -> Option<ConnectorPath<'s>> {
         match &self.from {
-            EventSource::External => panic!("expected route from to be an internal connection"),
-            EventSource::Model(connection) => connection.clone(),
+            EventSource::External => None,
+            EventSource::Internal => None,
+            EventSource::Model(connection) => Some(connection.clone()),
         }
     }
 

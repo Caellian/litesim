@@ -41,15 +41,8 @@ impl<'s> SystemModel<'s> {
         self.validated = false;
     }
 
-    pub fn push_route(&mut self, route: Route<'s>) {
-        match route.from {
-            crate::prelude::EventSource::External => {
-                panic!("system model route can't contain external references")
-            }
-            crate::prelude::EventSource::Model(from) => {
-                self.routes.insert(from, route.to);
-            }
-        }
+    pub fn push_route(&mut self, from: ConnectorPath<'s>, to: ConnectorPath<'s>) {
+        self.routes.insert(from, to);
         self.validated = false;
     }
 
@@ -112,28 +105,38 @@ impl<'s> SystemModel<'s> {
 
         self.validated = true;
 
-        self.cache_connections();
-
-        Ok(())
+        self.cache_connections()
     }
 
-    fn cache_connections(&mut self) {
+    fn cache_connections(&mut self) -> Result<(), ValidationError> {
         self.route_cache.clear();
 
         for id in self.models.keys() {
             let mut inputs = vec![];
             let mut outputs = vec![];
 
+            let mut used_outputs = vec![];
+
             for route in self.routes() {
                 if route.ends_in_model(&id) {
                     inputs.push(route.clone());
                 } else if route.starts_in_model(&id) {
+                    let from = route.from_connection().unwrap().connector;
+                    if used_outputs.contains(&from) {
+                        return Err(ValidationError::RepeatedOutput {
+                            connector: from.to_string(),
+                        });
+                    } else {
+                        used_outputs.push(from);
+                    }
                     outputs.push(route.clone());
                 }
             }
             self.route_cache
                 .insert(id.clone(), AdjacentModels { inputs, outputs });
         }
+
+        Ok(())
     }
 }
 
@@ -141,6 +144,18 @@ impl<'s> SystemModel<'s> {
 pub struct AdjacentModels<'s> {
     pub inputs: Vec<Route<'s>>,
     pub outputs: Vec<Route<'s>>,
+}
+
+impl<'s> AdjacentModels<'s> {
+    pub fn adjacent_input(&self, output: CowStr<'s>) -> Option<ConnectorPath<'s>> {
+        self.outputs.iter().find_map(|route| {
+            if route.from_connection().unwrap().connector == output {
+                Some(route.to.clone())
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl<'s> Default for AdjacentModels<'s> {

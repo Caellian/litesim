@@ -1,5 +1,5 @@
 [package]
-name = "litesim_models"
+name = "litesim-models"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,8 +11,9 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 rand = { version = "0.8", optional = true }
 
 [features]
-default = ["queue", "generator", "timer", "serde"]
+default = ["queue", "rand", "generator", "timer", "serde"]
 queue = []
-generator = ["dep:rand"]
+rand = ["dep:rand", "litesim/rand"]
+generator = ["rand"]
 timer = []
 serde = ["dep:serde", "litesim/serde"]
