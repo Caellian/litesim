@@ -14,7 +14,6 @@ impl<'s> Model<'s> for Player {
     fn send(&self);
 
     fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
-        // TODO: output connector should be strongly typed here assuming we've provided the names and types in output_connectors
         log::info!(
             "Player {} got the ball at {}",
             ctx.model_id.as_ref(),

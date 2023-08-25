@@ -200,10 +200,7 @@ impl Into<chrono::Duration> for TimeDelta {
 
 mod op_impl {
     use super::{Time, TimeDelta};
-    use std::{
-        ops::{Add, AddAssign, Sub, SubAssign},
-        time::Duration,
-    };
+    use std::ops::{Add, AddAssign, Sub, SubAssign};
 
     impl Add for TimeDelta {
         type Output = TimeDelta;

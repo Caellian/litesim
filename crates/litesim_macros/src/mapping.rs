@@ -1,6 +1,4 @@
-use std::io::Write;
-
-use proc_macro2::{Ident, Span, TokenTree};
+use proc_macro2::{Ident, Span};
 use syn::{punctuated::Punctuated, spanned::Spanned, *};
 
 use crate::model::ConnectorKind;
@@ -176,6 +174,7 @@ pub struct OCMInfo {
     pub kind: ConnectorKind,
     pub in_name: String,
     pub out_name: String,
+    pub ty: Type,
     pub signal: bool,
 }
 
@@ -396,6 +395,21 @@ impl SelfConnectorMapper {
                             ConnectorKind::Input => "internal_event_with_time",
                             ConnectorKind::Output => "push_event_with_time",
                         };
+
+                        let mut turbofish_type = Punctuated::new();
+                        turbofish_type.push(GenericArgument::Type(info.ty.clone()));
+                        let turbofish = Some(AngleBracketedGenericArguments {
+                            args: turbofish_type,
+                            colon2_token: Some(token::PathSep {
+                                spans: [Span::call_site(), Span::call_site()],
+                            }),
+                            lt_token: token::Lt {
+                                spans: [Span::call_site()],
+                            },
+                            gt_token: token::Gt {
+                                spans: [Span::call_site()],
+                            },
+                        });
 
                         return Ok(Expr::MethodCall(ExprMethodCall {
                             attrs,

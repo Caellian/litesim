@@ -51,6 +51,10 @@ pub fn ident_to_pat(ident: Ident) -> Pat {
     })
 }
 
+pub fn signal_ty() -> Type {
+    parse_quote!(())
+}
+
 pub fn find_ctx_arg_mut(sig: &mut Signature) -> Option<&mut PatType> {
     let mut found_ctx = None;
 
@@ -317,6 +321,7 @@ impl Parse for ModelTraitImpl {
             };
             let sig = out_fns.item.signature();
             let signal = out_fns.attrib_args.signal;
+            let ty = out_fns.event_ty().unwrap();
             let in_name = sig.ident.to_string();
             let out_name = out_fns
                 .attrib_args
@@ -327,6 +332,7 @@ impl Parse for ModelTraitImpl {
                 kind,
                 in_name,
                 out_name,
+                ty,
                 signal,
             });
         }
@@ -610,6 +616,23 @@ pub struct ItemConnector {
     pub attributes: Vec<Attribute>,
     pub attrib_args: ConnectorArguments,
     pub item: DetailContents,
+}
+
+impl ItemConnector {
+    pub fn is_signal(&self) -> bool {
+        self.attrib_args.signal
+    }
+
+    pub fn event_ty(&self) -> Option<Type> {
+        if self.is_signal() {
+            return Some(signal_ty());
+        }
+        if let FnArg::Typed(PatType { ty, .. }) = &self.item.signature().inputs[1] {
+            return Some((**ty).clone());
+        } else {
+            return None;
+        }
+    }
 }
 
 impl TryFrom<ImplItemFn> for ItemConnector {
