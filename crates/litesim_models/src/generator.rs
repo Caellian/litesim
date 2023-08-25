@@ -52,13 +52,13 @@ impl<'s, T: 'static, Rng: SimulationRng, D: Distribution<T> + 'static> Model<'s>
     for Generator<T, Rng, D>
 {
     #[input(signal)]
-    fn generate(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+    fn generate(&mut self, ctx: ModelCtx<'s>) -> _ {
         ctx.schedule_update(Now)?;
         Ok(())
     }
 
     #[output]
-    fn output(&self, value: T);
+    fn output(&self, value: T) -> _;
 
     fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         let generated = self.sample(&ctx.rng);

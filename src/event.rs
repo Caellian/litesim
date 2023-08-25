@@ -1,7 +1,7 @@
 use std::any::{Any, TypeId};
 
 pub trait Message: Any + 'static {}
-impl<T> Message for T where T: Any {}
+impl<T> Message for T where T: Any + 'static {}
 
 pub struct Event<M: Message> {
     type_info: TypeId,

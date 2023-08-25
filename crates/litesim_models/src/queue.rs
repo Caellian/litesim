@@ -10,14 +10,14 @@ pub struct Queue<T: Message> {
 
 #[litesim_model]
 impl<'s, T: Message> Model<'s> for Queue<T> {
-    #[input(name = "in")]
-    fn input(&mut self, value: T, _: ModelCtx<'s>) -> Result<(), SimulationError> {
+    #[input]
+    fn input(&mut self, value: T, _: ModelCtx<'s>) -> _ {
         self.queue.push_front(value);
         Ok(())
     }
 
     #[input(signal)]
-    fn pop(&mut self, _: ModelCtx<'s>) -> Result<(), SimulationError> {
+    fn pop(&mut self, _: ModelCtx<'s>) -> _ {
         if let Some(popped) = self.queue.pop_back() {
             self.output(popped)?;
         }
@@ -25,5 +25,5 @@ impl<'s, T: Message> Model<'s> for Queue<T> {
     }
 
     #[output]
-    fn output(&self, ev: T);
+    fn output(&self, ev: T) -> _;
 }

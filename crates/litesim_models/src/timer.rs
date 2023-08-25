@@ -13,7 +13,7 @@ pub struct Timer {
 #[litesim_model]
 impl<'s> Model<'s> for Timer {
     #[output(signal)]
-    fn signal(&mut self);
+    fn signal(&self) -> _;
 
     fn init(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         let initial = match self.limits.start {
@@ -88,7 +88,7 @@ mod randomized {
         for RandomizedTimer<Rng, D>
     {
         #[output(signal)]
-        fn signal(&mut self);
+        fn signal(&self) -> _;
 
         fn init(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
             let initial = match self.limits.start {

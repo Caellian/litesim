@@ -5,13 +5,13 @@ pub struct Player;
 #[litesim_model]
 impl<'s> Model<'s> for Player {
     #[input(signal)]
-    fn receive(&self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+    fn receive(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         ctx.schedule_update(Now)?;
         Ok(())
     }
 
     #[output(signal)]
-    fn send(&self);
+    fn send(&self) -> Result<(), SimulationError>;
 
     fn handle_update(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         log::info!(

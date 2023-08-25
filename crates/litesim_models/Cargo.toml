@@ -11,9 +11,14 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 rand = { version = "0.8", optional = true }
 
 [features]
-default = ["queue", "rand", "generator", "timer", "serde"]
-queue = []
+default = ["rand", "serde", "queue", "generator", "timer", "cloner"]
+
+# support
 rand = ["dep:rand", "litesim/rand"]
+serde = ["dep:serde", "litesim/serde"]
+
+# model flags
+queue = []
 generator = ["rand"]
 timer = []
-serde = ["dep:serde", "litesim/serde"]
+cloner = []

@@ -114,10 +114,10 @@ impl<'s> From<(&ConnectorPath<'s>, &ConnectorPath<'s>)> for Route<'s> {
     }
 }
 
-pub struct OutputConnectorInfo(pub(crate) &'static str, pub(crate) TypeId);
+pub struct OutputConnectorInfo(pub(crate) String, pub(crate) TypeId);
 
 impl OutputConnectorInfo {
-    pub const fn new<T: 'static>(id: &'static str) -> Self {
-        OutputConnectorInfo(id, TypeId::of::<T>())
+    pub fn new<T: 'static>(id: impl ToString) -> Self {
+        OutputConnectorInfo(id.to_string(), TypeId::of::<T>())
     }
 }

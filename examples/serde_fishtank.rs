@@ -10,7 +10,7 @@ pub struct Fish {
 #[litesim_model]
 impl<'s> Model<'s> for Fish {
     #[input(signal)]
-    fn get_bumped(&self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
+    fn get_bumped(&mut self, ctx: ModelCtx<'s>) -> _ {
         ctx.cancel_updates();
         if self.bump_count > 20 {
             return Ok(());
@@ -21,7 +21,7 @@ impl<'s> Model<'s> for Fish {
     }
 
     #[output(signal)]
-    fn bump(&self);
+    fn bump(&self) -> _;
 
     fn init(&mut self, ctx: ModelCtx<'s>) -> Result<(), SimulationError> {
         log::info!("{} woke up!", ctx.model_id);

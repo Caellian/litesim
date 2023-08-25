@@ -1,3 +1,5 @@
+#[cfg(feature = "cloner")]
+pub mod cloner;
 #[cfg(any(feature = "rand", feature = "generator"))]
 pub mod generator;
 #[cfg(feature = "queue")]
@@ -6,6 +8,8 @@ pub mod queue;
 pub mod timer;
 
 pub mod prelude {
+    #[cfg(feature = "cloner")]
+    pub use crate::cloner::Cloner as ClonerModel;
     #[cfg(all(feature = "rand", not(feature = "generator")))]
     pub use crate::generator::Generator;
     #[cfg(all(feature = "rand", feature = "generator"))]

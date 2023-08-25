@@ -1,14 +1,20 @@
+use std::collections::VecDeque;
+
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{
-    parse::Parse, parse2, parse_quote, spanned::Spanned, Attribute, Block, Error, FnArg, Generics,
+    parse::Parse, parse2, spanned::Spanned, token::Semi, Attribute, Block, Error, FnArg, Generics,
     ImplItemFn, ItemImpl, LitStr, MacroDelimiter, Meta, MetaList, Pat, PatIdent, PatType, Path,
-    Signature, Token, Type, TypePath,
+    Receiver, Signature, Token, Type, TypePath, parse_quote,
 };
 
-use crate::mapping::{OCMInfo, RenameIdent, SelfConnectorMapper};
+use crate::{
+    handler::InputHandler,
+    mapping::{OCMInfo, RenameIdent, SelfConnectorMapper},
+    util::*,
+};
 
-const ATTRIB_NAME: &str = "litesim_model";
+const MACRO_NAME: &str = "litesim_model";
 
 pub fn except_self_attrib(attributes: impl AsRef<[Attribute]>) -> Vec<Attribute> {
     let attr = attributes.as_ref();
@@ -18,7 +24,7 @@ pub fn except_self_attrib(attributes: impl AsRef<[Attribute]>) -> Vec<Attribute>
         match &curr.meta {
             Meta::Path(path) => {
                 if path.segments.len() == 1
-                    && path.segments.first().unwrap().ident.to_string().as_str() == ATTRIB_NAME
+                    && path.segments.first().unwrap().ident.to_string().as_str() == MACRO_NAME
                 {
                     continue;
                 }
@@ -39,16 +45,6 @@ pub fn pat_to_string(pattern: &Pat) -> Option<String> {
     };
 
     Some(result)
-}
-
-pub fn ident_to_pat(ident: Ident) -> Pat {
-    Pat::Ident(PatIdent {
-        attrs: vec![],
-        by_ref: None,
-        mutability: None,
-        ident,
-        subpat: None,
-    })
 }
 
 pub fn signal_ty() -> Type {
@@ -85,13 +81,15 @@ pub fn find_ctx_arg_mut(sig: &mut Signature) -> Option<&mut PatType> {
     found_ctx
 }
 
+#[derive(Clone)]
 pub struct InputConnector {
     pub attributes: Vec<Attribute>,
-    pub name: String,
+    pub name: Ident,
     pub event_name: Box<Pat>,
     pub event_ty: Box<Type>,
     pub ctx_name: Box<Pat>,
-    pub handler: TokenStream,
+    pub signal: bool,
+    pub handler: Block,
 }
 
 impl TryFrom<ItemConnector> for InputConnector {
@@ -103,62 +101,25 @@ impl TryFrom<ItemConnector> for InputConnector {
 
         let event_name: Box<Pat>;
         let event_ty: Box<Type>;
-        match value.kind {
-            Some(ConnectorKind::Input) => {
-                if value.attrib_args.signal {
-                    if inputs.len() != 2 {
-                        return Err(Error::new(
-                            sig.span(),
-                            "input signal handler should take in exactly 2 arguments: (&mut self, ctx: ModelCtx<'s>)",
-                        ));
-                    }
-                    event_name = parse_quote!(_);
-                    event_ty = parse_quote!(());
-                } else {
-                    if inputs.len() != 3 {
-                        return Err(Error::new(
-                            sig.span(),
-                            "input handler should take in exactly 3 arguments: (&mut self, event: _, ctx: ModelCtx<'s>)",
-                        ));
-                    }
-                    match &inputs[1] {
-                        syn::FnArg::Typed(arg) => {
-                            event_name = arg.pat.clone();
-                            event_ty = arg.ty.clone();
-                        }
-                        _ => {
-                            return Err(Error::new(
-                                sig.span(),
-                                "invalid 2nd argument; expected Event",
-                            ))
-                        }
-                    }
-                }
+        if value.attrib_args.signal {
+            event_name = parse_quote!(_);
+            event_ty = parse_quote!(());
+        } else {
+            if let syn::FnArg::Typed(arg) = &inputs[1] {
+                event_name = arg.pat.clone();
+                event_ty = arg.ty.clone();
+            } else {
+                unreachable!()
             }
-            _ => {
-                return Err(Error::new(sig.span(), "invalid connector type"));
-            }
+        }
+
+        let ctx_name = if let syn::FnArg::Typed(PatType { pat, .. }) = inputs.last().unwrap() {
+            (*pat).clone()
+        } else {
+            unreachable!()
         };
-
-        let ctx_name: Box<Pat> = match inputs.last().unwrap() {
-            syn::FnArg::Typed(arg) => arg.pat.clone(),
-            syn::FnArg::Receiver(_) => {
-                return Err(Error::new(
-                    sig.span(),
-                    "invalid last argument; expected ModelCtx",
-                ))
-            }
-        };
-
-        let in_block = value.item.into_block().expect("missing function body");
-        let mut handler = TokenStream::new();
-
-        let stmts = RenameIdent::default().process_stmts(in_block.stmts);
-
-        handler.extend(quote! {{
-            #(#stmts)
-            *
-        }});
+        let in_block = value.item.block().expect("missing function body");
+        let handler = RenameIdent::default().process_block(&in_block);
 
         let name = value
             .attrib_args
@@ -167,10 +128,11 @@ impl TryFrom<ItemConnector> for InputConnector {
 
         Ok(InputConnector {
             attributes: value.attributes,
-            name,
+            name: Ident::new(&name, sig.ident.span()),
             event_name,
             event_ty,
             ctx_name,
+            signal: value.attrib_args.signal,
             handler,
         })
     }
@@ -178,7 +140,7 @@ impl TryFrom<ItemConnector> for InputConnector {
 
 pub struct OutputConnector {
     pub attributes: Vec<Attribute>,
-    pub name: String,
+    pub name: Ident,
     pub ty: Box<Type>,
 }
 
@@ -226,7 +188,7 @@ impl TryFrom<ItemConnector> for OutputConnector {
 
         Ok(OutputConnector {
             attributes: value.attributes,
-            name,
+            name: Ident::new(name.as_str(), sig.ident.span()),
             ty,
         })
     }
@@ -242,15 +204,11 @@ pub struct ModelTraitImpl {
     pub self_ty: Box<Type>,
     pub inputs: Vec<InputConnector>,
     pub outputs: Vec<OutputConnector>,
-    pub other: Vec<TokenStream>,
+    pub other_impls: Vec<ImplItemFn>,
+    pub unhandled: Vec<TokenStream>,
 }
 
-static GEN_BY_MACRO: &[&str] = &[
-    "input_connectors",
-    "output_connectors",
-    "get_input_handler",
-    "type_id",
-];
+static AVOID_MANUAL_IMPL: &[&str] = &["type_id"];
 
 impl Parse for ModelTraitImpl {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -261,7 +219,7 @@ impl Parse for ModelTraitImpl {
             None => {
                 return Err(Error::new(
                     implementation.impl_token.span(),
-                    format!("{} should be applied to Model implementation", ATTRIB_NAME),
+                    format!("{} should be applied to Model implementation", MACRO_NAME),
                 ));
             }
         };
@@ -271,7 +229,7 @@ impl Parse for ModelTraitImpl {
                 implementation.impl_token.span(),
                 format!(
                     "{} doesn't work on negative Model implementation",
-                    ATTRIB_NAME
+                    MACRO_NAME
                 ),
             ));
         }
@@ -287,7 +245,8 @@ impl Parse for ModelTraitImpl {
 
         let mut inputs = Vec::with_capacity(details.len());
         let mut outputs = Vec::with_capacity(details.len());
-        let mut other = Vec::with_capacity(details.len());
+        let mut other_impls = Vec::with_capacity(details.len());
+        let mut unhandled = Vec::with_capacity(details.len());
 
         for item in implementation.items {
             match item {
@@ -300,11 +259,11 @@ impl Parse for ModelTraitImpl {
                     if let Ok(stub) = parse2::<ItemFnStub>(verb) {
                         details.push(ItemConnector::try_from(stub)?);
                     } else {
-                        other.push(forked);
+                        unhandled.push(forked);
                     }
                 }
                 it => {
-                    other.push(it.to_token_stream());
+                    unhandled.push(it.to_token_stream());
                 }
             }
         }
@@ -403,10 +362,11 @@ impl Parse for ModelTraitImpl {
                         }
                     };
                     let name = item.sig.ident.to_string();
-                    if GEN_BY_MACRO.contains(&name.as_str()) {
+
+                    if AVOID_MANUAL_IMPL.contains(&name.as_str()) {
                         return Err(Error::new(
                             item.sig.span(),
-                            format!("{} is already implemented by {} macro", name, ATTRIB_NAME),
+                            format!("{} should be implemented by {} macro", name, MACRO_NAME),
                         ));
                     }
 
@@ -425,7 +385,7 @@ impl Parse for ModelTraitImpl {
                         }
                     }
 
-                    other.push(item.to_token_stream())
+                    other_impls.push(item)
                 }
             }
         }
@@ -440,14 +400,15 @@ impl Parse for ModelTraitImpl {
             self_ty: implementation.self_ty,
             inputs,
             outputs,
-            other,
+            other_impls,
+            unhandled,
         })
     }
 }
 
 impl ModelTraitImpl {
     pub fn gen_input_connectors(&self) -> TokenStream {
-        let inputs: Vec<&str> = self.inputs.iter().map(|it| it.name.as_str()).collect();
+        let inputs: Vec<_> = self.inputs.iter().map(|it| it.name.to_string()).collect();
         quote! {
             fn input_connectors(&self) -> Vec<&'static str> {
                 vec![#(#inputs),*]
@@ -461,7 +422,7 @@ impl ModelTraitImpl {
             .iter()
             .map(|output| {
                 let ty = &output.ty;
-                let name = &output.name;
+                let name = output.name.to_string();
                 quote! {
                     ::litesim::routes::OutputConnectorInfo::new::<#ty>(#name)
                 }
@@ -474,35 +435,15 @@ impl ModelTraitImpl {
         }
     }
 
-    pub fn gen_input_conn_handler(&self) -> TokenStream {
+    pub fn gen_input_handlers(&self) -> TokenStream {
         let mut handlers: Vec<TokenStream> = Vec::with_capacity(self.inputs.len());
 
-        let self_ty = &self.self_ty;
-        for input in &self.inputs {
-            let input_ty = &input.event_ty;
-            let passed_attrib = &input.attributes;
-            let block = &input.handler;
+        let model_type = &self.self_ty;
+        for (i, input) in self.inputs.iter().enumerate() {
+            let handler = InputHandler::new(model_type.clone(), input.clone());
 
-            let event_name = &input.event_name;
-            let ctx_name = &input.ctx_name;
             handlers.push(quote! {
-                0 => {
-                    let handler: Box<
-                        &dyn Fn(
-                            &mut #self_ty,
-                            ::litesim::event::Event<#input_ty>,
-                            ::litesim::simulation::ModelCtx<'s>,
-                        ) -> Result<(), ::litesim::error::SimulationError>,
-                    > = Box::new(
-                        #(#passed_attrib)
-                        *
-                        &|self_: &mut #self_ty, event_: ::litesim::event::Event<#input_ty>, #ctx_name: ::litesim::simulation::ModelCtx<'s>| {
-                            let #event_name = event_.into_inner();
-                            #block
-                        },
-                    );
-                    return Some(handler);
-                }
+                #i => #handler
             })
         }
         quote! {
@@ -534,18 +475,63 @@ impl ToTokens for ModelTraitImpl {
         tokens.extend(quote!(for));
         self.self_ty.to_tokens(tokens);
 
-        let input_connectors: TokenStream = self.gen_input_connectors().to_token_stream();
-        let output_connectors: TokenStream = self.gen_output_connectors().to_token_stream();
-        let input_connector_handler: TokenStream = self.gen_input_conn_handler().to_token_stream();
+        let other_fns = &self.other_impls;
 
-        let other_fns = &self.other;
+        let manual_outputs_impl = other_fns
+            .iter()
+            .any(|it| it.sig.ident.to_string() == "output_connectors");
+
+        let output_connectors: TokenStream =
+            if !manual_outputs_impl {
+                self.gen_output_connectors().to_token_stream()
+            } else {
+                if !self.outputs.is_empty() {
+                    let mut errors = Error::new(
+                        self.outputs.first().unwrap().name.span(),
+                        "can't combine with output_connectors",
+                    );
+                    errors.extend(self.outputs.iter().skip(1).map(|it| {
+                        Error::new(it.name.span(), "can't combine with output_connectors")
+                    }));
+                    errors.to_compile_error()
+                } else {
+                    TokenStream::new()
+                }
+            };
+
+        let manual_inputs_impl = other_fns
+            .iter()
+            .map(|it| it.sig.ident.to_string())
+            .any(|it| it == "input_connectors" || it == "get_input_handler");
+
+        let input_connectors: TokenStream =
+            if !manual_inputs_impl {
+                let mut result = self.gen_input_connectors().to_token_stream();
+                result.extend(self.gen_input_handlers().to_token_stream());
+                result
+            } else {
+                if !self.inputs.is_empty() {
+                    let mut errors = Error::new(
+                        self.inputs.first().unwrap().name.span(),
+                        "can't combine with output_connectors",
+                    );
+                    errors.extend(self.inputs.iter().skip(1).map(|it| {
+                        Error::new(it.name.span(), "can't combine with output_connectors")
+                    }));
+                    errors.to_compile_error()
+                } else {
+                    TokenStream::new()
+                }
+            };
+
+        let unhandled = &self.unhandled;
 
         tokens.extend(quote!({
             #input_connectors
             #output_connectors
-            #input_connector_handler
 
             #(#other_fns)*
+            #(#unhandled)*
 
             fn type_id(&self) -> std::any::TypeId {
                 ::litesim::prelude::const_type_id::<Self>()
@@ -592,21 +578,28 @@ impl TryFrom<&Attribute> for ConnectorKind {
 
 pub enum DetailContents {
     ItemFn(ImplItemFn),
-    Signature(Signature),
+    Signature(ItemFnStub),
 }
 
 impl DetailContents {
-    pub fn signature(&self) -> Signature {
+    pub fn signature(&self) -> &Signature {
         match self {
-            DetailContents::ItemFn(item_fn) => item_fn.sig.clone(),
-            DetailContents::Signature(sig) => sig.clone(),
+            DetailContents::ItemFn(item_fn) => &item_fn.sig,
+            DetailContents::Signature(stub) => &stub.signature,
         }
     }
 
-    pub fn into_block(self) -> Option<Block> {
+    pub fn block(&self) -> Option<&Block> {
         match self {
-            DetailContents::ItemFn(item_fn) => Some(item_fn.block),
+            DetailContents::ItemFn(item_fn) => Some(&item_fn.block),
             DetailContents::Signature(_) => None,
+        }
+    }
+
+    pub fn stub_semi(&self) -> Option<&Semi> {
+        match self {
+            DetailContents::ItemFn(_) => None,
+            DetailContents::Signature(stub) => Some(&stub.semi),
         }
     }
 }
@@ -623,11 +616,196 @@ impl ItemConnector {
         self.attrib_args.signal
     }
 
+    pub fn validate(self) -> Result<Self, Error> {
+        let kind = match self.kind {
+            Some(it) => it,
+            None => return Ok(self),
+        };
+
+        let signature = self.item.signature();
+        let ident = &signature.ident;
+        let inputs = &signature.inputs;
+
+        let argument_errors = match kind {
+            ConnectorKind::Input => {
+                if self.is_signal() {
+                    vec![
+                        match inputs.get(0) {
+                            Some(FnArg::Receiver(Receiver {
+                                mutability: Some(_),
+                                ..
+                            })) => None,
+                            Some(other) => Some(Error::new(
+                                other.span(),
+                                "first argument should be a mutable self reference: &mut self",
+                            )),
+                            None => Some(Error::new(
+                                signature.span(),
+                                "missing required mutable self reference first argument: &mut self",
+                            )),
+                        },
+                        match inputs.get(1) {
+                            Some(syn::FnArg::Typed(_)) => None,
+                            Some(_) | None => Some(Error::new(
+                                ident.span(),
+                                "missing required ModelCtx<'s> second argument",
+                            )),
+                        },
+                    ]
+                } else {
+                    vec![
+                        match inputs.get(0) {
+                            Some(FnArg::Receiver(Receiver {
+                                mutability: Some(_),
+                                ..
+                            })) => None,
+                            Some(other) => Some(Error::new(
+                                other.span(),
+                                "first argument should be a mutable self reference: &mut self",
+                            )),
+                            None => Some(Error::new(
+                                signature.span(),
+                                "missing required mutable self reference first argument: &mut self",
+                            )),
+                        },
+                        match inputs.get(1) {
+                            Some(syn::FnArg::Typed(_)) => None,
+                            Some(_) | None => Some(Error::new(
+                                inputs.span(),
+                                "missing required event type second argument",
+                            )),
+                        },
+                        match inputs.get(2) {
+                            Some(syn::FnArg::Typed(_)) => None,
+                            Some(_) | None => Some(Error::new(
+                                inputs.span(),
+                                "missing required ModelCtx<'s> third argument",
+                            )),
+                        },
+                    ]
+                }
+            }
+            ConnectorKind::Output => {
+                if self.is_signal() {
+                    vec![match inputs.get(0) {
+                        Some(FnArg::Receiver(Receiver {
+                            mutability: None, ..
+                        })) => None,
+                        Some(other) => Some(Error::new(
+                            other.span(),
+                            "first argument should be a self reference: &self",
+                        )),
+                        _ => Some(Error::new(
+                            signature.span(),
+                            "missing required self reference first argument: &self",
+                        )),
+                    }]
+                } else {
+                    vec![
+                        match inputs.get(0) {
+                            Some(FnArg::Receiver(Receiver {
+                                mutability: None, ..
+                            })) => None,
+                            Some(other) => Some(Error::new(
+                                other.span(),
+                                "first argument should be a self reference: &self",
+                            )),
+                            _ => Some(Error::new(
+                                signature.span(),
+                                "missing required self reference first argument: &self",
+                            )),
+                        },
+                        match inputs.get(1) {
+                            Some(syn::FnArg::Typed(_)) => None,
+                            Some(_) | None => Some(Error::new(
+                                inputs.span(),
+                                "missing required event type second argument",
+                            )),
+                        },
+                    ]
+                }
+            }
+        };
+
+        let extra_args = if argument_errors.len() < inputs.len() {
+            let mut span_tokens = TokenStream::new();
+            span_tokens.extend(
+                inputs
+                    .iter()
+                    .skip(argument_errors.len())
+                    .map(|it| it.to_token_stream()),
+            );
+
+            Some(Error::new(
+                span_tokens.span(),
+                format!("connector only takes {} arguments", argument_errors.len()),
+            ))
+        } else {
+            None
+        };
+
+        let mut signature_errors: VecDeque<_> =
+            argument_errors.into_iter().filter_map(|it| it).collect();
+
+        if let Some(extra) = extra_args {
+            signature_errors.push_back(extra);
+        }
+
+        match kind {
+            ConnectorKind::Input => {
+                if let Some(semi) = self.item.stub_semi() {
+                    signature_errors.push_back(Error::new(
+                        semi.span(),
+                        "only output connectors can be stub; inputs must have a body returning Result<(), SimulationError>",
+                    ));
+                }
+            }
+            ConnectorKind::Output => {
+                if self.attributes.len() > 0 {
+                    signature_errors.push_back(Error::new(
+                        self.attributes.first().unwrap().span(),
+                        "output connectors aren't real functions; attribute will be erased",
+                    ));
+                    for attr in self.attributes.iter().skip(1) {
+                        signature_errors
+                            .push_back(Error::new(attr.span(), "attribute will be erased"))
+                    }
+                }
+            }
+        }
+
+        const BAD_TYPE_MSG: &str =
+            "connector return type is Result<(), SimulationError> (or wildcart)";
+        match &signature.output {
+            syn::ReturnType::Default => {
+                signature_errors.push_back(Error::new(signature.span(), BAD_TYPE_MSG))
+            }
+            syn::ReturnType::Type(_, found_ty) => match &**found_ty {
+                Type::Group(_) | Type::Paren(_) | Type::Path(_) => {
+                    // can't enforce typing due to type aliasing
+                }
+                Type::Infer(_) => {
+                    // allow inferring, we don't need the type anyway
+                }
+                other => signature_errors.push_back(Error::new(other.span(), BAD_TYPE_MSG)),
+            },
+        }
+
+        if signature_errors.len() > 0 {
+            let mut errors = signature_errors.pop_front().unwrap();
+            errors.extend(signature_errors.into_iter());
+            return Err(errors);
+        }
+
+        Ok(self)
+    }
+
     pub fn event_ty(&self) -> Option<Type> {
         if self.is_signal() {
             return Some(signal_ty());
         }
-        if let FnArg::Typed(PatType { ty, .. }) = &self.item.signature().inputs[1] {
+        if let Some(FnArg::Typed(PatType { ty, .. })) = &self.item.signature().inputs.iter().nth(1)
+        {
             return Some((**ty).clone());
         } else {
             return None;
@@ -657,12 +835,13 @@ impl TryFrom<ImplItemFn> for ItemConnector {
             }
         }
 
-        Ok(ItemConnector {
+        ItemConnector {
             kind: connector_kind,
             attributes: passed,
             attrib_args: attrib_args.unwrap_or_default(),
             item: DetailContents::ItemFn(item),
-        })
+        }
+        .validate()
     }
 }
 
@@ -676,15 +855,9 @@ impl TryFrom<ItemFnStub> for ItemConnector {
 
         for a in &item.attrs {
             match ConnectorKind::try_from(a) {
-                Ok(kind) => match kind {
-                    ConnectorKind::Input => {
-                        return Err(Error::new(
-                            item.signature.span(),
-                            "stub methods must be output connectors (allow only #[output] attribute)",
-                        ));
-                    }
-                    ConnectorKind::Output => connector_kind = Some(ConnectorKind::Output),
-                },
+                Ok(kind) => {
+                    connector_kind = Some(kind);
+                }
                 _ => {
                     passed.push(a.clone());
                 }
@@ -702,19 +875,20 @@ impl TryFrom<ItemFnStub> for ItemConnector {
             ));
         }
 
-        Ok(ItemConnector {
+        ItemConnector {
             kind: connector_kind,
             attributes: passed,
             attrib_args: attrib_args.unwrap_or_default(),
-            item: DetailContents::Signature(item.signature),
-        })
+            item: DetailContents::Signature(item),
+        }
+        .validate()
     }
 }
 
 pub struct ItemFnStub {
     pub attrs: Vec<Attribute>,
     pub signature: Signature,
-    pub terminator: Token![;],
+    pub semi: Token![;],
 }
 
 impl Parse for ItemFnStub {
@@ -722,7 +896,7 @@ impl Parse for ItemFnStub {
         Ok(ItemFnStub {
             attrs: Attribute::parse_outer(input)?,
             signature: input.parse()?,
-            terminator: input.parse()?,
+            semi: input.parse()?,
         })
     }
 }
@@ -766,5 +940,13 @@ impl Parse for ConnectorArguments {
             }
         }
         Ok(result)
+    }
+}
+
+impl ToTokens for ItemFnStub {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append_all(self.attrs.clone());
+        tokens.extend(self.signature.clone().into_token_stream());
+        tokens.extend(self.semi.into_token_stream());
     }
 }

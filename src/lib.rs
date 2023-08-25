@@ -28,5 +28,6 @@ pub mod prelude {
 
     // macros
     pub use crate::connection;
+    pub use litesim_macros::input_handler;
     pub use litesim_macros::litesim_model;
 }
